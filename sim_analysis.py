@@ -325,6 +325,36 @@ def compute_gene_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
     return F1_dict
 
 
+def get_sim_params():
+    return {
+        "all_n_cnas": [(1, 2), (3, 3), (6, 3)],
+        "all_cna_sizes": ["1e7", "3e7", "5e7"],
+        "all_ploidy": [2],
+        "all_random": np.arange(10),
+    }
+
+
+def get_sim_runs():
+    sim_params = get_sim_params()
+    run_info = []
+
+    for n_cnas in sim_params["all_n_cnas"]:
+        for cna_size in sim_params["all_cna_sizes"]:
+            for ploidy in sim_params["all_ploidy"]:
+                for random in sim_params["all_random"]:
+                    run_info.append(
+                        {
+                            "n_cnas": n_cnas,
+                            "cna_size": cna_size,
+                            "ploidy": ploidy,
+                            "random": random,
+                            "sampleid": f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}",
+                        }
+                    )
+
+    return pd.DataFrame(run_info)
+
+
 def get_sampleid(n_cnas, cna_size, ploidy, random):
     """
     Generate sampleid based on the number of CNAs - (global, shared) - CNA size, ploidy, and random seed.
@@ -369,56 +399,84 @@ def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
     plt.show()
 
 
-def get_sim_runs():
-    run_info = []
+def get_calico_clones_path(calico_pure_dir, n_cnas, cna_size, ploidy, random):
+    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+    r_calico = get_best_r_hmrf(f"{calico_pure_dir}/{sampleid}/configfile0")
 
-    for n_cnas in [(1, 2), (3, 3), (6, 3)]:
-        for cna_size in ["1e7", "3e7", "5e7"]:
-            for ploidy in [2]:
-                for random in np.arange(10):
-                    sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+    return (
+        f"{calico_pure_dir}/{sampleid}/clone3_rectangle{r_calico}_w1.0/clone_labels.tsv"
+    )
 
-                    run_info.append(
-                        {
-                            "n_cnas": n_cnas,
-                            "cna_size": cna_size,
-                            "ploidy": ploidy,
-                            "random": random,
-                            "sampleid": sampleid,
-                        }
-                    )
 
-    df_run_info = pd.DataFrame(run_info)
+def get_calico_clones(calico_pure_dir, n_cnas, cna_size, ploidy, random):
+    calico_clones_path = get_calico_clones_path(
+        calico_pure_dir, n_cnas, cna_size, ploidy, random
+    )
 
-    return df_run_info
+    print("Reading CalicoST clones from", calico_clones_path)
+
+    calico_clones = pd.read_csv(calico_clones_path, header=0, index_col=0, sep="\t")
+    calico_clones = calico_clones.rename(
+        columns={calico_clones.columns[0]: "est_clone"}
+    )
+
+    calico_clones.index = calico_clones.index.str.replace("spot_", "")
+    calico_clones.index.name = "spot"
+
+    return calico_clones
+
+
+def get_numbat_path(numbat_dir, sampleid):
+    return f"{numbat_dir}/{sampleid}/outs/clone_post_2.tsv"
+
+
+def get_numbat_clones(numbat_dir, sampleid):
+    numbat_path = get_numbat_path(numbat_dir, sampleid)
+
+    if Path(numbat_path).exists():
+        numbat_clones = pd.read_csv(
+            numbat_path,
+            header=0,
+            index_col=0,
+            sep="\t",
+        )
+    else:
+        numbat_clones = None
+
+    return numbat_clones
 
 
 def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
     map_cnasize = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb"}
+
+    sim_params = get_sim_params()
     df_clone_ari = []
 
-    for n_cnas in [(1, 2), (3, 3), (6, 3)]:
-        for cna_size in ["1e7", "3e7", "5e7"]:
-            for ploidy in [2]:
-                for random in np.arange(10):
-                    sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
-
+    for n_cnas in sim_params["all_n_cnas"]:
+        for cna_size in sim_params["all_cna_sizes"]:
+            for ploidy in sim_params["all_ploidy"]:
+                for random in sim_params["all_random"]:
+                    true_path = get_true_clones_path(
+                        true_dir, n_cnas, cna_size, ploidy, random
+                    )
                     true_clones = get_true_clones(
                         true_dir, n_cnas, cna_size, ploidy, random
                     )
 
+                    # sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+                    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+
                     # CalicoST
-                    r_calico = get_best_r_hmrf(
-                        f"{calico_pure_dir}/{sampleid}/configfile0"
+                    best_fit_clones_path = get_calico_clones_path(
+                        calico_pure_dir, n_cnas, cna_size, ploidy, random
                     )
 
-                    best_fit_clones_path = f"{calico_pure_dir}/{sampleid}/clone3_rectangle{r_calico}_w1.0/clone_labels.tsv"
-                    calico_pure_clones = pd.read_csv(
-                        best_fit_clones_path, header=0, index_col=0, sep="\t"
+                    calico_pure_clones = get_calico_clones(
+                        calico_pure_dir, n_cnas, cna_size, ploidy, random
                     )
-
                     calico_pure_clones = calico_pure_clones.join(true_clones)
 
+                    # TODO "r_calico": r_calico,
                     df_clone_ari.append(
                         pd.DataFrame(
                             {
@@ -429,11 +487,10 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
                                 "ploidy": int(ploidy),
                                 "method": "CalicoST",
                                 "ARI": adjusted_rand_score(
-                                    calico_pure_clones.clone_label,
+                                    calico_pure_clones.est_clone,
                                     calico_pure_clones.true_clone,
                                 ),
                                 "sample_id": sampleid,
-                                "r_calico": r_calico,
                                 "true_clones_path": true_path,
                                 "best_fit_clones_path": best_fit_clones_path,
                             },
@@ -442,13 +499,20 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
                     )
 
                     # Numbat
-                    if Path(f"{numbat_dir}/{sampleid}/outs/clone_post_2.tsv").exists():
+                    numbat_path = get_numbat_path(numbat_dir, sampleid)
+                    numbat_clones = get_numbat_clones(numbat_dir, sampleid)
+
+                    numbat_clones = numbat_clones.join(true_clones)
+
+                    """
+                    if Path(numbat_path).exists():
                         numbat_clones = pd.read_csv(
-                            f"{numbat_dir}/{sampleid}/outs/clone_post_2.tsv",
+                            numbat_path,
                             header=0,
                             index_col=0,
                             sep="\t",
                         )
+
                         numbat_clones = numbat_clones.join(true_clones)
 
                         df_clone_ari.append(
@@ -489,7 +553,9 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
                                 index=[0],
                             )
                         )
+                    """
 
+                    """
                     # STARCH
                     starch_clones = pd.read_csv(
                         f"{starch_dir}/{sampleid}/labels_STITCH_output.csv",
@@ -517,7 +583,7 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
                                 "ploidy": int(ploidy),
                                 "method": "STARCH",
                                 "ARI": adjusted_rand_score(
-                                    starch_clones.starch_label, starch_clones.true_label
+                                    starch_clones.starch_label, starch_clones.true_clone
                                 ),
                                 "sample_id": sampleid,
                                 "true_clones_path": true_path,
@@ -526,6 +592,7 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
                             index=[0],
                         )
                     )
+                    """
 
     df_clone_ari = pd.concat(
         df_clone_ari, ignore_index=True
@@ -548,24 +615,24 @@ def plot_aris(df_clone_ari):
     for i, n_cnas in enumerate([3, 6, 9]):
         tmpdf = df_clone_ari[df_clone_ari.n_cnas == n_cnas]
 
-        seaborn.boxplot(
+        sns.boxplot(
             data=tmpdf,
             x="cna_size",
             y="ARI",
             hue="method",
-            palette=seaborn.color_palette(color_methods),
+            palette=sns.color_palette(color_methods),
             boxprops=dict(alpha=0.7),
             linewidth=1,
             showfliers=False,
             ax=axes[i],
         )
 
-        seaborn.stripplot(
+        sns.stripplot(
             data=tmpdf,
             x="cna_size",
             y="ARI",
             hue="method",
-            palette=seaborn.color_palette(color_methods),
+            palette=sns.color_palette(color_methods),
             dodge=10,
             edgecolor="black",
             linewidth=0.5,
@@ -575,6 +642,7 @@ def plot_aris(df_clone_ari):
         if (i + 1) < 3:
             axes[i].get_legend().remove()
 
+        axes[i].set_ylim(0.0, 1.0)
         axes[i].set_ylabel("Clone ARI")
         axes[i].set_xlabel("Simulated CNA length")
         axes[i].set_title(f"{n_cnas} CNA events")
