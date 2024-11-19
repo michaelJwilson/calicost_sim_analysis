@@ -1,58 +1,13 @@
-import sys
-import warnings
 from pathlib import Path
 
-import anndata
-import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 import scanpy as sc
 import seaborn
-from calicost import (arg_parse, hmrf, parse_input, utils_hmm, utils_hmrf,
-                      utils_IO, utils_phase_switch, utils_plotting)
 from matplotlib import pyplot as plt
-from matplotlib.lines import Line2D
-from numba.core.errors import NumbaDeprecationWarning
-from sklearn.metrics import adjusted_rand_score, silhouette_score
+from sklearn.metrics import adjusted_rand_score
 
-
-def get_best_r_hmrf(configuration_file, relative_path="../nomixing_calicost_related/"):
-    """
-    Retrieve the CalicoST random initialization with the maximum likelihood.
-    """
-    try:
-        config = arg_parse.read_configuration_file(configuration_file)
-    except:
-        config = arg_parse.read_joint_configuration_file(configuration_file)
-
-    # NB find the best HMRF initialization random seed
-    df_3_clone = []
-
-    for random_state in range(10):
-        output_dir = relative_path + config["output_dir"].split("/")[-1]
-        outdir = f"{output_dir}/clone{config['n_clones']}_rectangle{random_state}_w{config['spatial_weight']:.1f}"
-
-        if Path(f"{outdir}/rdrbaf_final_nstates{config['n_states']}_smp.npz").exists():
-            res_combine = dict(
-                np.load(f"{outdir}/rdrbaf_final_nstates{config['n_states']}_smp.npz"),
-                allow_pickle=True,
-            )
-            df_3_clone.append(
-                pd.DataFrame(
-                    {
-                        "random seed": random_state,
-                        "log-likelihood": res_combine["total_llf"],
-                    },
-                    index=[0],
-                )
-            )
-
-    df_3_clone = pd.concat(df_3_clone, ignore_index=True)
-    idx = np.argmax(df_3_clone["log-likelihood"])
-
-    r_hmrf_initialization = df_3_clone["random seed"].iloc[idx]
-
-    return int(r_hmrf_initialization)
+from calicost import arg_parse
 
 
 def read_gene_loc(hg_table_file):
@@ -66,14 +21,107 @@ def read_gene_loc(hg_table_file):
 
     # add chr column to be integer without "chr" prefix
     df_hgtable["chr"] = [int(x[3:]) for x in df_hgtable.chrom]
-
-    # rename cdsStart and cdsEnd to start and end
     df_hgtable = df_hgtable.rename(columns={"cdsStart": "start", "cdsEnd": "end"})
 
     # TODO rename name2 as gene.
     df_hgtable.set_index("name2", inplace=True)
 
     return df_hgtable[["chr", "start", "end"]]
+
+
+def get_config(configuration_file, verbose=False):
+    """
+    Retrieve the CalicoST config.
+    """
+    config = None
+
+    if not Path(configuration_file).exists():
+        return None
+
+    if verbose:
+        print(f"Reading configuration file: {configuration_file}")
+
+    try:
+        config = arg_parse.read_configuration_file(configuration_file)
+    except:
+        print(f"Error reading as single configuration, {configuration_file}")
+
+        try:
+            config = arg_parse.read_joint_configuration_file(configuration_file)
+        except:
+            print(f"Error reading as joint configuration, {configuration_file}")
+            return None
+
+    if verbose:
+        for key in config:
+            print(f"{key}: {config[key]}")
+
+    return config
+
+
+def get_rdrbaf(
+    configuration_file,
+    random_state,
+    relative_path="../nomixing_calicost_related/",
+    verbose=False,
+):
+    """
+    Retrieve the CalicoST RDR/BAF determinations.
+    """
+    config = get_config(configuration_file)
+
+    output_dir = relative_path + config["output_dir"].split("/")[-1]
+    outdir = f"{output_dir}/clone{config['n_clones']}_rectangle{random_state}_w{config['spatial_weight']:.1f}"
+
+    fpath = f"{outdir}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
+
+    if Path(fpath).exists():
+        res_combine = dict(
+            np.load(f"{outdir}/rdrbaf_final_nstates{config['n_states']}_smp.npz"),
+            allow_pickle=True,
+        )
+
+        return res_combine
+    else:
+        if verbose:
+            print(f"CalicoST RDR/BAF determinations do not exist for {fpath}")
+
+        return None
+
+
+def get_best_r_hmrf(
+    configuration_file, relative_path="../nomixing_calicost_related/", verbose=False
+):
+    """
+    Retrieve the CalicoST random initialization with the maximum likelihood.
+    """
+    config = get_config(configuration_file, verbose=verbose)
+
+    # NB find the best HMRF initialization random seed
+    df_clone = []
+
+    for random_state in range(10):
+        rdrbaf = get_rdrbaf(
+            configuration_file, random_state, relative_path=relative_path
+        )
+
+        if rdrbaf is not None:
+            df_clone.append(
+                pd.DataFrame(
+                    {
+                        "random seed": random_state,
+                        "log-likelihood": rdrbaf["total_llf"],
+                    },
+                    index=[0],
+                )
+            )
+
+    df_clone = pd.concat(df_clone, ignore_index=True)
+    idx = np.argmax(df_clone["log-likelihood"])
+
+    r_hmrf_initialization = df_clone["random seed"].iloc[idx]
+
+    return int(r_hmrf_initialization)
 
 
 def read_true_gene_cna(df_hgtable, truth_cna_file):
@@ -84,8 +132,6 @@ def read_true_gene_cna(df_hgtable, truth_cna_file):
     df_cna = pd.read_csv(truth_cna_file, header=0, index_col=0, sep="\t")
 
     unique_clones = df_cna.index.unique()
-
-    # print(f"Found unique clones: {unique_clones}")
 
     for clonename in unique_clones:
         clonal_cna = df_cna[df_cna.index == clonename]
@@ -279,6 +325,27 @@ def compute_gene_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
     return F1_dict
 
 
+def get_sampleid(n_cnas, cna_size, ploidy, random):
+    """
+    Generate sampleid based on the number of CNAs - (global, shared) - CNA size, ploidy, and random seed.
+    """
+    return f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+
+
+def get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random):
+    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+    return f"{true_dir}/{sampleid}/truth_clone_labels.tsv"
+
+
+def get_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
+    true_clones_path = get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random)
+
+    true_clones = pd.read_csv(true_clones_path, header=0, index_col=0, sep="\t")
+    true_clones = true_clones.rename(columns={true_clones.columns[0]: "true_label"})
+
+    return true_clones
+
+
 def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
     map_cnasize = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb"}
 
@@ -289,7 +356,7 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
             for ploidy in [2]:
                 for random in np.arange(10):
                     sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
-
+                    """
                     true_path = f"{true_dir}/{sampleid}/truth_clone_labels.tsv"
                     true_clones = pd.read_csv(
                         true_path, header=0, index_col=0, sep="\t"
@@ -297,6 +364,10 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
 
                     true_clones = true_clones.rename(
                         columns={true_clones.columns[0]: "true_label"}
+                    )
+                    """
+                    true_clones = get_true_clones(
+                        true_dir, n_cnas, cna_size, ploidy, random
                     )
 
                     # CalicoST
