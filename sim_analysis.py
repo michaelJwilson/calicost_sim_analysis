@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import seaborn
+import seaborn as sns
 from matplotlib import pyplot as plt
 from sklearn.metrics import adjusted_rand_score
 
@@ -340,15 +340,61 @@ def get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random):
 def get_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
     true_clones_path = get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random)
 
+    print("Reading true clones from", true_clones_path)
+
     true_clones = pd.read_csv(true_clones_path, header=0, index_col=0, sep="\t")
-    true_clones = true_clones.rename(columns={true_clones.columns[0]: "true_label"})
+    true_clones = true_clones.rename(columns={true_clones.columns[0]: "true_clone"})
+
+    true_clones.index = true_clones.index.str.replace("spot_", "")
+    true_clones.index.name = "spot"
+
+    true_clones["true_clone"] = true_clones["true_clone"].str.replace("clone_", "")
 
     return true_clones
 
 
+def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
+    def custom_sort(x):
+        return (x != "normal", x)
+
+    true_clones = get_true_clones(true_dir, n_cnas, cna_size, ploidy, random)
+
+    labels = true_clones["true_clone"].unique()
+    labels = np.array(sorted(labels, key=custom_sort))
+
+    sns.scatterplot(
+        data=true_clones, x="x", y="y", hue="true_clone", hue_order=labels, s=10
+    )
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.show()
+
+
+def get_sim_runs():
+    run_info = []
+
+    for n_cnas in [(1, 2), (3, 3), (6, 3)]:
+        for cna_size in ["1e7", "3e7", "5e7"]:
+            for ploidy in [2]:
+                for random in np.arange(10):
+                    sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+
+                    run_info.append(
+                        {
+                            "n_cnas": n_cnas,
+                            "cna_size": cna_size,
+                            "ploidy": ploidy,
+                            "random": random,
+                            "sampleid": sampleid,
+                        }
+                    )
+
+    df_run_info = pd.DataFrame(run_info)
+
+    return df_run_info
+
+
 def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
     map_cnasize = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb"}
-
     df_clone_ari = []
 
     for n_cnas in [(1, 2), (3, 3), (6, 3)]:
@@ -356,16 +402,7 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
             for ploidy in [2]:
                 for random in np.arange(10):
                     sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
-                    """
-                    true_path = f"{true_dir}/{sampleid}/truth_clone_labels.tsv"
-                    true_clones = pd.read_csv(
-                        true_path, header=0, index_col=0, sep="\t"
-                    )
 
-                    true_clones = true_clones.rename(
-                        columns={true_clones.columns[0]: "true_label"}
-                    )
-                    """
                     true_clones = get_true_clones(
                         true_dir, n_cnas, cna_size, ploidy, random
                     )
@@ -393,7 +430,7 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
                                 "method": "CalicoST",
                                 "ARI": adjusted_rand_score(
                                     calico_pure_clones.clone_label,
-                                    calico_pure_clones.true_label,
+                                    calico_pure_clones.true_clone,
                                 ),
                                 "sample_id": sampleid,
                                 "r_calico": r_calico,
@@ -425,7 +462,7 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
                                     "method": "Numbat",
                                     "ARI": adjusted_rand_score(
                                         numbat_clones.clone_opt,
-                                        numbat_clones.true_label,
+                                        numbat_clones.true_clone,
                                     ),
                                     "sample_id": sampleid,
                                     "true_clones_path": true_path,
