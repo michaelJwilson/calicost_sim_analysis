@@ -29,6 +29,10 @@ def read_gene_loc(hg_table_file):
     return df_hgtable[["chr", "start", "end"]]
 
 
+def get_config_path(calico_pure_dir, sampleid):
+    return f"{calico_pure_dir}/{sampleid}/configfile0"
+
+
 def get_config(configuration_file, verbose=False):
     """
     Retrieve the CalicoST config.
@@ -367,10 +371,11 @@ def get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random):
     return f"{true_dir}/{sampleid}/truth_clone_labels.tsv"
 
 
-def get_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
+def get_true_clones(true_dir, n_cnas, cna_size, ploidy, random, verbose=False):
     true_clones_path = get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random)
 
-    print("Reading True clones from", true_clones_path)
+    if verbose:
+        print("Reading True clones from", true_clones_path)
 
     true_clones = pd.read_csv(true_clones_path, header=0, index_col=0, sep="\t")
     true_clones = true_clones.rename(columns={true_clones.columns[0]: "true_clone"})
@@ -401,19 +406,20 @@ def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
 
 def get_calico_clones_path(calico_pure_dir, n_cnas, cna_size, ploidy, random):
     sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
-    r_calico = get_best_r_hmrf(f"{calico_pure_dir}/{sampleid}/configfile0")
+    r_calico = get_best_r_hmrf(get_config_path(calico_pure_dir, sampleid))
 
     return (
         f"{calico_pure_dir}/{sampleid}/clone3_rectangle{r_calico}_w1.0/clone_labels.tsv"
     )
 
 
-def get_calico_clones(calico_pure_dir, n_cnas, cna_size, ploidy, random):
+def get_calico_clones(calico_pure_dir, n_cnas, cna_size, ploidy, random, verbose=False):
     calico_clones_path = get_calico_clones_path(
         calico_pure_dir, n_cnas, cna_size, ploidy, random
     )
 
-    print("Reading CalicoST clones from", calico_clones_path)
+    if verbose:
+        print("Reading CalicoST clones from", calico_clones_path)
 
     calico_clones = pd.read_csv(calico_clones_path, header=0, index_col=0, sep="\t")
     calico_clones = calico_clones.rename(
@@ -430,11 +436,12 @@ def get_numbat_path(numbat_dir, sampleid):
     return f"{numbat_dir}/{sampleid}/outs/clone_post_2.tsv"
 
 
-def get_numbat_clones(numbat_dir, sampleid):
+def get_numbat_clones(numbat_dir, sampleid, verbose=False):
     numbat_path = get_numbat_path(numbat_dir, sampleid)
 
     if Path(numbat_path).exists():
-        print("Reading Numbat clones from", numbat_path)
+        if verbose:
+            print("Reading Numbat clones from", numbat_path)
 
         numbat_clones = pd.read_csv(
             numbat_path,
@@ -457,13 +464,14 @@ def get_numbat_clones(numbat_dir, sampleid):
 
 
 def get_starch_path(starch_dir, sampleid):
-    return (f"{starch_dir}/{sampleid}/labels_STITCH_output.csv",)
+    return f"{starch_dir}/{sampleid}/labels_STITCH_output.csv"
 
 
-def get_starch_clones(starch_dir, sampleid, true_clones=None):
+def get_starch_clones(starch_dir, sampleid, true_clones=None, verbose=False):
     starch_path = get_starch_path(starch_dir, sampleid)
 
-    print("Reading Starch clones from", starch_path)
+    if verbose:
+        print("Reading Starch clones from", starch_path)
 
     starch_clones = pd.read_csv(
         starch_path,
@@ -572,6 +580,7 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
 
                     # STARCH
                     starch_path = get_starch_path(starch_dir, sampleid)
+
                     starch_clones = get_starch_clones(starch_dir, sampleid, true_clones)
 
                     starch_clones = starch_clones.join(true_clones)
@@ -648,48 +657,47 @@ def plot_aris(df_clone_ari):
 
 
 def get_f1s(true_dir, df_hgtable, calico_pure_dir, numbat_dir, starch_dir):
+    # EG 6 shared CNAs and 3 clone specific.
+    sim_params = get_sim_params()
     list_events = ["DEL", "AMP", "CNLOH", "overall"]
 
-    cna_sizes = ["1e7", "3e7", "5e7"]
-
-    # EG 6 shared CNAs and 3 clone specific.
-    all_n_cnas = [(1, 2), (3, 3), (6, 3)]
     df_event_f1 = []
 
-    for n_cnas in all_n_cnas:
-        for cna_size in cna_sizes:
-            for ploidy in [2]:
-                for random in np.arange(10):
-                    sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+    for n_cnas in sim_params["all_n_cnas"]:
+        for cna_size in sim_params["all_cna_sizes"]:
+            for ploidy in sim_params["all_ploidy"]:
+                for random in sim_params["all_random"]:
+                    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
 
                     truth_cna_file = f"{true_dir}/{sampleid}/truth_cna.tsv"
-
-                    # NB
                     true_gene_cna = read_true_gene_cna(df_hgtable, truth_cna_file)
 
+                    base_summary = get_base_sim_summary(
+                        n_cnas, cna_size, ploidy, random, sampleid, truth_cna_file
+                    )
+
                     # CalicoST
-                    configuration_file = f"{calico_pure_dir}/{sampleid}/configfile0"
+                    configuration_file = get_config_path(calico_pure_dir, sampleid)
                     calico_gene_cna = read_calico_gene_cna(configuration_file)
 
                     F1_dict = compute_gene_F1(true_gene_cna, calico_gene_cna)
 
-                    interim = pd.DataFrame(
-                        {
-                            "cnas": f"{n_cnas[0], n_cnas[1]}",
-                            "n_cnas": n_cnas[0] + n_cnas[1],
-                            "cna_size": cna_size,
-                            "random": random,
-                            "ploidy": int(ploidy),
-                            "sample_id": sampleid,
-                            "method": "CalicoST",
-                            "event": list_events,
-                            "F1": [F1_dict[e] for e in list_events],
-                            "true_cna": truth_cna_file,
-                            "config": configuration_file,
-                        }
+                    df_event_f1.append(
+                        pd.DataFrame(
+                            {
+                                "cnas": f"{n_cnas[0], n_cnas[1]}",
+                                "n_cnas": n_cnas[0] + n_cnas[1],
+                                "cna_size": cna_size,
+                                "random": random,
+                                "ploidy": int(ploidy),
+                                "sample_id": sampleid,
+                                "method": "CalicoST",
+                                "event": list_events,
+                                "F1": [F1_dict[e] for e in list_events],
+                                "true_cna": truth_cna_file,
+                            }
+                        )
                     )
-
-                    df_event_f1.append(interim)
 
                     # Numbat
                     bulk_clones_final_file = (
@@ -770,24 +778,24 @@ def plot_f1s(df_event_f1):
     for i, n_cnas in enumerate([3, 6, 9]):
         tmpdf = df_event_f1[df_event_f1.n_cnas == n_cnas]
 
-        seaborn.boxplot(
+        sns.boxplot(
             data=tmpdf,
             x="event",
             y="F1",
             hue="method",
-            palette=seaborn.color_palette(color_methods),
+            palette=sns.color_palette(color_methods),
             boxprops=dict(alpha=0.7),
             linewidth=1,
             showfliers=False,
             ax=axes[i],
         )
 
-        seaborn.stripplot(
+        sns.stripplot(
             data=tmpdf,
             x="event",
             y="F1",
             hue="method",
-            palette=seaborn.color_palette(color_methods),
+            palette=sns.color_palette(color_methods),
             dodge=10,
             edgecolor="black",
             linewidth=0.5,
