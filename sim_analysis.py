@@ -440,15 +440,52 @@ def get_numbat_clones(numbat_dir, sampleid):
             index_col=0,
             sep="\t",
         )
+
+        numbat_clones = numbat_clones[["clone_opt"]]
+        numbat_clones = numbat_clones.rename(
+            columns={numbat_clones.columns[0]: "est_clone"}
+        )
+
+        numbat_clones.index = numbat_clones.index.str.replace("spot_", "")
+        numbat_clones.index.name = "spot"
     else:
         numbat_clones = None
 
     return numbat_clones
 
 
-def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
+def get_starch_path(starch_dir, sampleid):
+    return (f"{starch_dir}/{sampleid}/labels_STITCH_output.csv",)
+
+
+def get_starch_clones(starch_dir, sampleid):
+    return pd.read_csv(
+        f"{starch_dir}/{sampleid}/labels_STITCH_output.csv",
+        header=0,
+        index_col=0,
+        sep=",",
+        names=["est_clone"],
+    )
+
+
+def get_base_sim_summary(n_cnas, cna_size, ploidy, random, sampleid, true_path):
     map_cnasize = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb"}
 
+    return pd.DataFrame(
+        {
+            "cnas": f"{n_cnas[0], n_cnas[1]}",
+            "n_cnas": n_cnas[0] + n_cnas[1],
+            "cna_size": map_cnasize[cna_size],
+            "ploidy": int(ploidy),
+            "random": random,
+            "sample_id": sampleid,
+            "true_clones_path": true_path,
+        },
+        index=[0],
+    )
+
+
+def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
     sim_params = get_sim_params()
     df_clone_ari = []
 
@@ -476,100 +513,54 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
                     )
                     calico_pure_clones = calico_pure_clones.join(true_clones)
 
-                    # TODO "r_calico": r_calico,
-                    df_clone_ari.append(
-                        pd.DataFrame(
-                            {
-                                "cnas": f"{n_cnas[0], n_cnas[1]}",
-                                "n_cnas": n_cnas[0] + n_cnas[1],
-                                "cna_size": map_cnasize[cna_size],
-                                "random": random,
-                                "ploidy": int(ploidy),
-                                "method": "CalicoST",
-                                "ARI": adjusted_rand_score(
-                                    calico_pure_clones.est_clone,
-                                    calico_pure_clones.true_clone,
-                                ),
-                                "sample_id": sampleid,
-                                "true_clones_path": true_path,
-                                "best_fit_clones_path": best_fit_clones_path,
-                            },
-                            index=[0],
-                        )
+                    base_summary = get_base_sim_summary(
+                        n_cnas, cna_size, ploidy, random, sampleid, true_path
                     )
+
+                    # TODO "r_calico": r_calico,
+                    calicost_summary = base_summary.copy()
+                    calicost_summary["method"] = "CalicoST"
+                    calicost_summary["ARI"] = adjusted_rand_score(
+                        calico_pure_clones.est_clone,
+                        calico_pure_clones.true_clone,
+                    )
+                    calicost_summary["best_fit_clones_path"] = best_fit_clones_path
+
+                    df_clone_ari.append(calicost_summary)
 
                     # Numbat
                     numbat_path = get_numbat_path(numbat_dir, sampleid)
                     numbat_clones = get_numbat_clones(numbat_dir, sampleid)
 
-                    numbat_clones = numbat_clones.join(true_clones)
+                    numbat_summary = base_summary.copy()
+                    numbat_summary["method"] = "Numbat"
+                    numbat_summary["best_fit_clones_path"] = numbat_path
 
-                    """
-                    if Path(numbat_path).exists():
-                        numbat_clones = pd.read_csv(
-                            numbat_path,
-                            header=0,
-                            index_col=0,
-                            sep="\t",
-                        )
-
+                    if numbat_clones is not None:
                         numbat_clones = numbat_clones.join(true_clones)
-
-                        df_clone_ari.append(
-                            pd.DataFrame(
-                                {
-                                    "cnas": f"{n_cnas[0], n_cnas[1]}",
-                                    "n_cnas": n_cnas[0] + n_cnas[1],
-                                    "cna_size": map_cnasize[cna_size],
-                                    "random": random,
-                                    "ploidy": int(ploidy),
-                                    "method": "Numbat",
-                                    "ARI": adjusted_rand_score(
-                                        numbat_clones.clone_opt,
-                                        numbat_clones.true_clone,
-                                    ),
-                                    "sample_id": sampleid,
-                                    "true_clones_path": true_path,
-                                    "best_fit_clones_path": f"{numbat_dir}/{sampleid}/outs/clone_post_2.tsv",
-                                },
-                                index=[0],
-                            )
+                        numbat_summary["ARI"] = adjusted_rand_score(
+                            numbat_clones.est_clone,
+                            numbat_clones.true_clone,
                         )
+
                     else:
-                        df_clone_ari.append(
-                            pd.DataFrame(
-                                {
-                                    "cnas": f"{n_cnas[0], n_cnas[1]}",
-                                    "n_cnas": n_cnas[0] + n_cnas[1],
-                                    "cna_size": map_cnasize[cna_size],
-                                    "random": random,
-                                    "ploidy": int(ploidy),
-                                    "method": "Numbat",
-                                    "ARI": 0.0,
-                                    "sample_id": sampleid,
-                                    "true_clones_path": true_path,
-                                    "best_fit_clones_path": "-",
-                                },
-                                index=[0],
-                            )
-                        )
-                    """
+                        numbat_summary["ARI"] = 0.0
+                        numbat_summary["best_fit_clones_path"] = "-"
 
-                    """
+                    df_clone_ari.append(numbat_summary)
+
                     # STARCH
-                    starch_clones = pd.read_csv(
-                        f"{starch_dir}/{sampleid}/labels_STITCH_output.csv",
-                        header=0,
-                        index_col=0,
-                        sep=",",
-                        names=["starch_label"],
-                    )
+                    starch_path = get_starch_path(starch_dir, sampleid)
+                    starch_clones = get_starch_clones(starch_dir, sampleid)
+
+                    # NB mapper for spot to spot index (TBC).
                     map_index = {
                         f"{true_clones.x.values[i]}.0x{true_clones.y.values[i]}.0": true_clones.index[
                             i
                         ]
                         for i in range(true_clones.shape[0])
                     }
+
                     starch_clones.index = starch_clones.index.map(map_index)
                     starch_clones = starch_clones.join(true_clones)
 
@@ -592,11 +583,9 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
                             index=[0],
                         )
                     )
-                    """
 
-    df_clone_ari = pd.concat(
-        df_clone_ari, ignore_index=True
-    )  # .sort_values(by='cna_size', ascending=False)
+    # TODO .sort_values(by='cna_size', ascending=False)
+    df_clone_ari = pd.concat(df_clone_ari, ignore_index=True)
     df_clone_ari.cna_size = pd.Categorical(
         df_clone_ari.cna_size, categories=["10Mb", "30Mb", "50Mb"], ordered=True
     )
