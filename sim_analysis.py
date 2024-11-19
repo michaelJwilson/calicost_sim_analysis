@@ -370,7 +370,7 @@ def get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random):
 def get_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
     true_clones_path = get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random)
 
-    print("Reading true clones from", true_clones_path)
+    print("Reading True clones from", true_clones_path)
 
     true_clones = pd.read_csv(true_clones_path, header=0, index_col=0, sep="\t")
     true_clones = true_clones.rename(columns={true_clones.columns[0]: "true_clone"})
@@ -434,6 +434,8 @@ def get_numbat_clones(numbat_dir, sampleid):
     numbat_path = get_numbat_path(numbat_dir, sampleid)
 
     if Path(numbat_path).exists():
+        print("Reading Numbat clones from", numbat_path)
+
         numbat_clones = pd.read_csv(
             numbat_path,
             header=0,
@@ -458,14 +460,33 @@ def get_starch_path(starch_dir, sampleid):
     return (f"{starch_dir}/{sampleid}/labels_STITCH_output.csv",)
 
 
-def get_starch_clones(starch_dir, sampleid):
-    return pd.read_csv(
-        f"{starch_dir}/{sampleid}/labels_STITCH_output.csv",
+def get_starch_clones(starch_dir, sampleid, true_clones=None):
+    starch_path = get_starch_path(starch_dir, sampleid)
+
+    print("Reading Starch clones from", starch_path)
+
+    starch_clones = pd.read_csv(
+        starch_path,
         header=0,
         index_col=0,
         sep=",",
         names=["est_clone"],
     )
+
+    # NB mapper for spot index based on (x,y).
+    if true_clones is not None:
+        map_index = {
+            f"{true_clones.x.values[i]}.0x{true_clones.y.values[i]}.0": true_clones.index[
+                i
+            ]
+            for i in range(true_clones.shape[0])
+        }
+
+        starch_clones.index = starch_clones.index.map(map_index)
+
+        starch_clones.index.name = "spot"
+
+    return starch_clones
 
 
 def get_base_sim_summary(n_cnas, cna_size, ploidy, random, sampleid, true_path):
@@ -551,44 +572,27 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
 
                     # STARCH
                     starch_path = get_starch_path(starch_dir, sampleid)
-                    starch_clones = get_starch_clones(starch_dir, sampleid)
+                    starch_clones = get_starch_clones(starch_dir, sampleid, true_clones)
 
-                    # NB mapper for spot to spot index (TBC).
-                    map_index = {
-                        f"{true_clones.x.values[i]}.0x{true_clones.y.values[i]}.0": true_clones.index[
-                            i
-                        ]
-                        for i in range(true_clones.shape[0])
-                    }
-
-                    starch_clones.index = starch_clones.index.map(map_index)
                     starch_clones = starch_clones.join(true_clones)
 
-                    df_clone_ari.append(
-                        pd.DataFrame(
-                            {
-                                "cnas": f"{n_cnas[0], n_cnas[1]}",
-                                "n_cnas": n_cnas[0] + n_cnas[1],
-                                "cna_size": map_cnasize[cna_size],
-                                "random": random,
-                                "ploidy": int(ploidy),
-                                "method": "STARCH",
-                                "ARI": adjusted_rand_score(
-                                    starch_clones.starch_label, starch_clones.true_clone
-                                ),
-                                "sample_id": sampleid,
-                                "true_clones_path": true_path,
-                                "best_fit_clones_path": f"{starch_dir}/{sampleid}/labels_STITCH_output.csv",
-                            },
-                            index=[0],
-                        )
+                    starch_summary = base_summary.copy()
+                    starch_summary["method"] = "STARCH"
+                    starch_summary["ARI"] = adjusted_rand_score(
+                        starch_clones.est_clone,
+                        starch_clones.true_clone,
                     )
+                    starch_summary["best_fit_clones_path"] = starch_path
+
+                    df_clone_ari.append(starch_summary)
 
     # TODO .sort_values(by='cna_size', ascending=False)
     df_clone_ari = pd.concat(df_clone_ari, ignore_index=True)
     df_clone_ari.cna_size = pd.Categorical(
         df_clone_ari.cna_size, categories=["10Mb", "30Mb", "50Mb"], ordered=True
     )
+
+    # NB scrollable columns.
     df_clone_ari.style.set_table_styles(
         [{"selector": "th", "props": [("position", "sticky"), ("top", "0")]}],
         overwrite=False,
