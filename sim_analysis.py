@@ -1,29 +1,19 @@
 import sys
-import numpy as np
-import pandas as pd
+import warnings
 from pathlib import Path
 
-from calicost import (
-    arg_parse,
-    parse_input,
-    utils_IO,
-    utils_hmm,
-    utils_hmrf,
-    utils_plotting,
-    utils_phase_switch,
-    hmrf,
-)
-
-from matplotlib import pyplot as plt
-import seaborn
-import scanpy as sc
 import anndata
-from sklearn.metrics import silhouette_score, adjusted_rand_score
-from matplotlib.lines import Line2D
 import matplotlib.patches as mpatches
-
-import warnings
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import seaborn
+from calicost import (arg_parse, hmrf, parse_input, utils_hmm, utils_hmrf,
+                      utils_IO, utils_phase_switch, utils_plotting)
+from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 from numba.core.errors import NumbaDeprecationWarning
+from sklearn.metrics import adjusted_rand_score, silhouette_score
 
 
 def get_best_r_hmrf(configuration_file, relative_path="../nomixing_calicost_related/"):
