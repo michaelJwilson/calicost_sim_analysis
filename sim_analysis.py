@@ -289,7 +289,7 @@ def compute_gene_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
     return F1_dict
 
 
-def get_aris():
+def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
     map_cnasize = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb"}
 
     df_clone_ari = []
@@ -441,3 +441,210 @@ def get_aris():
     ).set_sticky(axis="columns")
 
     return df_clone_ari
+
+
+def plot_aris(df_clone_ari):
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True, dpi=300)
+    color_methods = ["#4963C1", "#97b085", "#dad67d"]
+
+    for i, n_cnas in enumerate([3, 6, 9]):
+        tmpdf = df_clone_ari[df_clone_ari.n_cnas == n_cnas]
+
+        seaborn.boxplot(
+            data=tmpdf,
+            x="cna_size",
+            y="ARI",
+            hue="method",
+            palette=seaborn.color_palette(color_methods),
+            boxprops=dict(alpha=0.7),
+            linewidth=1,
+            showfliers=False,
+            ax=axes[i],
+        )
+
+        seaborn.stripplot(
+            data=tmpdf,
+            x="cna_size",
+            y="ARI",
+            hue="method",
+            palette=seaborn.color_palette(color_methods),
+            dodge=10,
+            edgecolor="black",
+            linewidth=0.5,
+            ax=axes[i],
+        )
+
+        if (i + 1) < 3:
+            axes[i].get_legend().remove()
+
+        axes[i].set_ylabel("Clone ARI")
+        axes[i].set_xlabel("Simulated CNA length")
+        axes[i].set_title(f"{n_cnas} CNA events")
+
+    h, l = axes[-1].get_legend_handles_labels()
+    axes[-1].legend(h[:3], l[:3], loc="upper left", bbox_to_anchor=(1, 1))
+
+    fig.tight_layout()
+    fig.show()
+
+
+def get_f1s(true_dir, df_hgtable, calico_pure_dir, numbat_dir, starch_dir):
+    list_events = ["DEL", "AMP", "CNLOH", "overall"]
+
+    cna_sizes = ["1e7", "3e7", "5e7"]
+
+    # EG 6 shared CNAs and 3 clone specific.
+    all_n_cnas = [(1, 2), (3, 3), (6, 3)]
+    df_event_f1 = []
+
+    for n_cnas in all_n_cnas:
+        for cna_size in cna_sizes:
+            for ploidy in [2]:
+                for random in np.arange(10):
+                    sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+
+                    truth_cna_file = f"{true_dir}/{sampleid}/truth_cna.tsv"
+
+                    # NB
+                    true_gene_cna = read_true_gene_cna(df_hgtable, truth_cna_file)
+
+                    # CalicoST
+                    configuration_file = f"{calico_pure_dir}/{sampleid}/configfile0"
+                    calico_gene_cna = read_calico_gene_cna(configuration_file)
+
+                    F1_dict = compute_gene_F1(true_gene_cna, calico_gene_cna)
+
+                    interim = pd.DataFrame(
+                        {
+                            "cnas": f"{n_cnas[0], n_cnas[1]}",
+                            "n_cnas": n_cnas[0] + n_cnas[1],
+                            "cna_size": cna_size,
+                            "random": random,
+                            "ploidy": int(ploidy),
+                            "sample_id": sampleid,
+                            "method": "CalicoST",
+                            "event": list_events,
+                            "F1": [F1_dict[e] for e in list_events],
+                            "true_cna": truth_cna_file,
+                            "config": configuration_file,
+                        }
+                    )
+
+                    df_event_f1.append(interim)
+
+                    # Numbat
+                    bulk_clones_final_file = (
+                        f"{numbat_dir}/{sampleid}/outs/bulk_clones_final.tsv.gz"
+                    )
+
+                    if Path(bulk_clones_final_file).exists():
+                        numbat_gene_cna = read_numbat_gene_cna(bulk_clones_final_file)
+
+                        F1_dict = compute_gene_F1(true_gene_cna, numbat_gene_cna)
+
+                        df_event_f1.append(
+                            pd.DataFrame(
+                                {
+                                    "cnas": f"{n_cnas[0], n_cnas[1]}",
+                                    "n_cnas": n_cnas[0] + n_cnas[1],
+                                    "cna_size": cna_size,
+                                    "random": random,
+                                    "ploidy": int(ploidy),
+                                    "sample_id": sampleid,
+                                    "method": "Numbat",
+                                    "event": list_events,
+                                    "F1": [F1_dict[e] for e in list_events],
+                                    "true_cna": truth_cna_file,
+                                }
+                            )
+                        )
+                    else:
+                        df_event_f1.append(
+                            pd.DataFrame(
+                                {
+                                    "cnas": f"{n_cnas[0], n_cnas[1]}",
+                                    "n_cnas": n_cnas[0] + n_cnas[1],
+                                    "cna_size": cna_size,
+                                    "random": random,
+                                    "ploidy": int(ploidy),
+                                    "sample_id": sampleid,
+                                    "method": "Numbat",
+                                    "event": list_events,
+                                    "F1": [0 for e in list_events],
+                                    "true_cna": truth_cna_file,
+                                }
+                            )
+                        )
+
+                    # STARCH
+                    states_file = f"{starch_dir}/{sampleid}/states_STITCH_output.csv"
+
+                    starch_gene_cna = read_starch_gene_cna(states_file)
+
+                    F1_dict = compute_gene_F1(true_gene_cna, starch_gene_cna)
+
+                    df_event_f1.append(
+                        pd.DataFrame(
+                            {
+                                "cnas": f"{n_cnas[0], n_cnas[1]}",
+                                "n_cnas": n_cnas[0] + n_cnas[1],
+                                "cna_size": cna_size,
+                                "random": random,
+                                "ploidy": int(ploidy),
+                                "sample_id": sampleid,
+                                "method": "STARCH",
+                                "event": list_events,
+                                "F1": [F1_dict[e] for e in list_events],
+                                "true_cna": truth_cna_file,
+                            }
+                        )
+                    )
+
+    return pd.concat(df_event_f1, ignore_index=True)
+
+
+def plot_f1s(df_event_f1):
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4), dpi=300)
+
+    color_methods = ["#4963C1", "#97b085", "#dad67d"]
+
+    for i, n_cnas in enumerate([3, 6, 9]):
+        tmpdf = df_event_f1[df_event_f1.n_cnas == n_cnas]
+
+        seaborn.boxplot(
+            data=tmpdf,
+            x="event",
+            y="F1",
+            hue="method",
+            palette=seaborn.color_palette(color_methods),
+            boxprops=dict(alpha=0.7),
+            linewidth=1,
+            showfliers=False,
+            ax=axes[i],
+        )
+
+        seaborn.stripplot(
+            data=tmpdf,
+            x="event",
+            y="F1",
+            hue="method",
+            palette=seaborn.color_palette(color_methods),
+            dodge=10,
+            edgecolor="black",
+            linewidth=0.5,
+            ax=axes[i],
+        )
+
+        if i + 1 < 3:
+            axes[i].get_legend().remove()
+
+        axes[i].set_ylabel("F1")
+        axes[i].set_xlabel(None)
+        axes[i].set_title(f"{n_cnas} CNA events")
+        axes[i].set_xticklabels(axes[0].get_xticklabels(), rotation=90)
+
+    h, l = axes[-1].get_legend_handles_labels()
+    axes[-1].legend(h[:3], l[:3], loc="upper left", bbox_to_anchor=(1, 1))
+
+    fig.tight_layout()
+    fig.show()
