@@ -16,15 +16,14 @@ def read_gene_loc(hg_table_file):
     """
     df_hgtable = pd.read_csv(hg_table_file, sep="\t", header=0, index_col=0)
 
-    # only keep chr1 to chr22
     df_hgtable = df_hgtable[df_hgtable.chrom.isin([f"chr{i}" for i in range(1, 23)])]
 
-    # add chr column to be integer without "chr" prefix
+    # NB add chr column as integer without "chr" prefix
     df_hgtable["chr"] = [int(x[3:]) for x in df_hgtable.chrom]
-    df_hgtable = df_hgtable.rename(columns={"cdsStart": "start", "cdsEnd": "end"})
-
-    # TODO rename name2 as gene.
-    df_hgtable.set_index("name2", inplace=True)
+    df_hgtable = df_hgtable.rename(
+        columns={"cdsStart": "start", "cdsEnd": "end", "name2": "gene"}
+    )
+    df_hgtable.set_index("gene", inplace=True)
 
     return df_hgtable[["chr", "start", "end"]]
 
@@ -401,19 +400,50 @@ def get_true_clones(true_dir, n_cnas, cna_size, ploidy, random, verbose=False):
     return true_clones
 
 
-def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
-    def custom_sort(x):
-        return (x != "normal", x)
+def __normal_clone_sorter(x):
+    return (x != "normal", x)
 
+
+def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
     true_clones = get_true_clones(true_dir, n_cnas, cna_size, ploidy, random)
+    true_clones["true_clone"] = true_clones["true_clone"].str.replace("normal", "N")
 
     labels = true_clones["true_clone"].unique()
-    labels = np.array(sorted(labels, key=custom_sort))
+    labels = np.array(sorted(labels, key=__normal_clone_sorter))
 
-    sns.scatterplot(
-        data=true_clones, x="x", y="y", hue="true_clone", hue_order=labels, s=10
+    plt.figure(figsize=(3, 3))
+
+    palette = sns.color_palette()
+
+    ax = sns.scatterplot(
+        data=true_clones,
+        x="x",
+        y="y",
+        hue="true_clone",
+        hue_order=labels,
+        s=10,
+        palette=palette,
     )
-    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+
+    handles, labels = ax.get_legend_handles_labels()
+    labels = [rf"$C_{l}$" for l in labels]
+
+    ax.set_title(
+        f"{n_cnas[0]}/{n_cnas[0]} ({cna_size} MB), {random} real." + r" $\ell$",
+        fontsize=10,
+    )
+    ax.set_xlabel("X", fontsize=8)
+    ax.set_ylabel("Y", fontsize=8)
+    ax.tick_params(axis="both", which="major", labelsize=8)
+    ax.legend(
+        handles,
+        labels,
+        bbox_to_anchor=(1.05, 1),
+        loc="upper left",
+        fontsize=8,
+        frameon=False,
+    )
+
     plt.show()
 
 
@@ -426,7 +456,9 @@ def get_calico_clones_path(calico_pure_dir, n_cnas, cna_size, ploidy, random):
     )
 
 
-def get_calico_clones(calico_pure_dir, n_cnas, cna_size, ploidy, random, verbose=False):
+def get_calico_clones(
+    calico_pure_dir, n_cnas, cna_size, ploidy, random, true_dir=None, verbose=False
+):
     calico_clones_path = get_calico_clones_path(
         calico_pure_dir, n_cnas, cna_size, ploidy, random
     )
@@ -442,7 +474,59 @@ def get_calico_clones(calico_pure_dir, n_cnas, cna_size, ploidy, random, verbose
     calico_clones.index = calico_clones.index.str.replace("spot_", "")
     calico_clones.index.name = "spot"
 
+    # NB join with (x,y) based on spot coordinate of truth.
+    if true_dir is not None:
+        true_clones = get_true_clones(true_dir, n_cnas, cna_size, ploidy, random)
+        calico_clones = calico_clones.join(true_clones)
+
     return calico_clones
+
+
+def plot_calico_clones(
+    calico_pure_dir, n_cnas, cna_size, ploidy, random, true_dir, verbose=False
+):
+    calico_clones = get_calico_clones(
+        calico_pure_dir, n_cnas, cna_size, ploidy, random, true_dir=true_dir
+    )
+
+    labels = calico_clones["est_clone"].unique()
+    labels = np.array(sorted(labels, key=__normal_clone_sorter))
+
+    plt.figure(figsize=(3, 3))
+
+    palette = sns.color_palette()
+
+    ax = sns.scatterplot(
+        data=calico_clones,
+        x="x",
+        y="y",
+        hue="est_clone",
+        hue_order=labels,
+        s=10,
+        palette=palette,
+    )
+
+    handles, labels = ax.get_legend_handles_labels()
+    labels = [rf"$C_{l}$" for l in labels]
+
+    ax.set_title(
+        f"{n_cnas[0]}/{n_cnas[0]} ({cna_size} MB), {random} real." + r" $\hat \ell$",
+        fontsize=10,
+    )
+
+    ax.set_xlabel("X", fontsize=8)
+    ax.set_ylabel("Y", fontsize=8)
+    ax.tick_params(axis="both", which="major", labelsize=8)
+    ax.legend(
+        handles,
+        labels,
+        bbox_to_anchor=(1.05, 1),
+        loc="upper left",
+        fontsize=8,
+        frameon=False,
+    )
+
+    plt.show()
 
 
 def get_numbat_path(numbat_dir, sampleid):
