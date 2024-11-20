@@ -345,23 +345,29 @@ def get_sim_params():
     }
 
 
-def get_sim_runs():
+def get_sim_run_generator():
     sim_params = get_sim_params()
-    run_info = []
 
     for n_cnas in sim_params["all_n_cnas"]:
         for cna_size in sim_params["all_cna_sizes"]:
             for ploidy in sim_params["all_ploidy"]:
                 for random in sim_params["all_random"]:
-                    run_info.append(
-                        {
-                            "n_cnas": n_cnas,
-                            "cna_size": cna_size,
-                            "ploidy": ploidy,
-                            "random": random,
-                            "sampleid": f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}",
-                        }
-                    )
+                    yield n_cnas, cna_size, ploidy, random
+
+
+def get_sim_runs():
+    run_info = []
+
+    for n_cnas, cna_size, ploidy, random in get_sim_run_generator():
+        run_info.append(
+            {
+                "n_cnas": n_cnas,
+                "cna_size": cna_size,
+                "ploidy": ploidy,
+                "random": random,
+                "sampleid": f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}",
+            }
+        )
 
     return pd.DataFrame(run_info)
 
@@ -525,82 +531,75 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
     sim_params = get_sim_params()
     df_clone_ari = []
 
-    for n_cnas in sim_params["all_n_cnas"]:
-        for cna_size in sim_params["all_cna_sizes"]:
-            for ploidy in sim_params["all_ploidy"]:
-                for random in sim_params["all_random"]:
-                    true_path = get_true_clones_path(
-                        true_dir, n_cnas, cna_size, ploidy, random
-                    )
-                    true_clones = get_true_clones(
-                        true_dir, n_cnas, cna_size, ploidy, random
-                    )
+    for n_cnas, cna_size, ploidy, random in get_sim_run_generator():
+        true_path = get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random)
+        true_clones = get_true_clones(true_dir, n_cnas, cna_size, ploidy, random)
 
-                    # sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
-                    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+        # sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+        sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
 
-                    # CalicoST
-                    best_fit_clones_path = get_calico_clones_path(
-                        calico_pure_dir, n_cnas, cna_size, ploidy, random
-                    )
+        # CalicoST
+        best_fit_clones_path = get_calico_clones_path(
+            calico_pure_dir, n_cnas, cna_size, ploidy, random
+        )
 
-                    calico_pure_clones = get_calico_clones(
-                        calico_pure_dir, n_cnas, cna_size, ploidy, random
-                    )
-                    calico_pure_clones = calico_pure_clones.join(true_clones)
+        calico_pure_clones = get_calico_clones(
+            calico_pure_dir, n_cnas, cna_size, ploidy, random
+        )
+        calico_pure_clones = calico_pure_clones.join(true_clones)
 
-                    base_summary = get_base_sim_summary(
-                        n_cnas, cna_size, ploidy, random, sampleid, true_path
-                    )
+        base_summary = get_base_sim_summary(
+            n_cnas, cna_size, ploidy, random, sampleid, true_path
+        )
 
-                    # TODO "r_calico": r_calico,
-                    calicost_summary = base_summary.copy()
-                    calicost_summary["method"] = "CalicoST"
-                    calicost_summary["ARI"] = adjusted_rand_score(
-                        calico_pure_clones.est_clone,
-                        calico_pure_clones.true_clone,
-                    )
-                    calicost_summary["best_fit_clones_path"] = best_fit_clones_path
+        # TODO "r_calico": r_calico,
+        calicost_summary = base_summary.copy()
+        calicost_summary["method"] = "CalicoST"
+        calicost_summary["ARI"] = adjusted_rand_score(
+            calico_pure_clones.est_clone,
+            calico_pure_clones.true_clone,
+        )
+        calicost_summary["best_fit_clones_path"] = best_fit_clones_path
 
-                    df_clone_ari.append(calicost_summary)
+        df_clone_ari.append(calicost_summary)
 
-                    # Numbat
-                    numbat_path = get_numbat_path(numbat_dir, sampleid)
-                    numbat_clones = get_numbat_clones(numbat_dir, sampleid)
+        # Numbat
+        numbat_path = get_numbat_path(numbat_dir, sampleid)
+        numbat_clones = get_numbat_clones(numbat_dir, sampleid)
 
-                    numbat_summary = base_summary.copy()
-                    numbat_summary["method"] = "Numbat"
-                    numbat_summary["best_fit_clones_path"] = numbat_path
+        numbat_summary = base_summary.copy()
+        numbat_summary["method"] = "Numbat"
+        numbat_summary["best_fit_clones_path"] = numbat_path
 
-                    if numbat_clones is not None:
-                        numbat_clones = numbat_clones.join(true_clones)
-                        numbat_summary["ARI"] = adjusted_rand_score(
-                            numbat_clones.est_clone,
-                            numbat_clones.true_clone,
-                        )
+        if numbat_clones is not None:
+            numbat_clones = numbat_clones.join(true_clones)
+            numbat_summary["ARI"] = adjusted_rand_score(
+                numbat_clones.est_clone,
+                numbat_clones.true_clone,
+            )
 
-                    else:
-                        numbat_summary["ARI"] = 0.0
-                        numbat_summary["best_fit_clones_path"] = "-"
+        else:
+            numbat_summary["ARI"] = 0.0
+            numbat_summary["best_fit_clones_path"] = "-"
 
-                    df_clone_ari.append(numbat_summary)
+        df_clone_ari.append(numbat_summary)
 
-                    # STARCH
-                    starch_path = get_starch_path(starch_dir, sampleid)
+        # STARCH
+        starch_path = get_starch_path(starch_dir, sampleid)
 
-                    starch_clones = get_starch_clones(starch_dir, sampleid, true_clones)
+        starch_clones = get_starch_clones(starch_dir, sampleid, true_clones)
 
-                    starch_clones = starch_clones.join(true_clones)
+        starch_clones = starch_clones.join(true_clones)
 
-                    starch_summary = base_summary.copy()
-                    starch_summary["method"] = "STARCH"
-                    starch_summary["ARI"] = adjusted_rand_score(
-                        starch_clones.est_clone,
-                        starch_clones.true_clone,
-                    )
-                    starch_summary["best_fit_clones_path"] = starch_path
+        starch_summary = base_summary.copy()
+        starch_summary["method"] = "STARCH"
+        starch_summary["ARI"] = adjusted_rand_score(
+            starch_clones.est_clone,
+            starch_clones.true_clone,
+        )
+        starch_summary["best_fit_clones_path"] = starch_path
 
-                    df_clone_ari.append(starch_summary)
+        df_clone_ari.append(starch_summary)
 
     # TODO .sort_values(by='cna_size', ascending=False)
     df_clone_ari = pd.concat(df_clone_ari, ignore_index=True)
@@ -682,77 +681,72 @@ def get_f1s(true_dir, df_hgtable, calico_pure_dir, numbat_dir, starch_dir):
 
     df_event_f1 = []
 
-    for n_cnas in sim_params["all_n_cnas"]:
-        for cna_size in sim_params["all_cna_sizes"]:
-            for ploidy in sim_params["all_ploidy"]:
-                for random in sim_params["all_random"]:
-                    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+    for n_cnas, cna_size, ploidy, random in get_sim_run_generator():
+        sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
 
-                    truth_cna_file = get_truth_cna_file(true_dir, sampleid)
-                    true_gene_cna = read_true_gene_cna(df_hgtable, truth_cna_file)
+        truth_cna_file = get_truth_cna_file(true_dir, sampleid)
+        true_gene_cna = read_true_gene_cna(df_hgtable, truth_cna_file)
 
-                    base_summary = get_base_sim_summary(
-                        n_cnas, cna_size, ploidy, random, sampleid, truth_cna_file
-                    )
+        base_summary = get_base_sim_summary(
+            n_cnas, cna_size, ploidy, random, sampleid, truth_cna_file
+        )
 
-                    # CalicoST
-                    configuration_file = get_config_path(calico_pure_dir, sampleid)
-                    calico_gene_cna = read_calico_gene_cna(configuration_file)
+        # CalicoST
+        configuration_file = get_config_path(calico_pure_dir, sampleid)
+        calico_gene_cna = read_calico_gene_cna(configuration_file)
 
-                    F1_dict = compute_gene_F1(true_gene_cna, calico_gene_cna)
+        F1_dict = compute_gene_F1(true_gene_cna, calico_gene_cna)
 
-                    calicost_summary = base_summary.copy()
-                    calicost_summary["method"] = "CalicoST"
-                    calicost_summary["event"] = [list_events]
-                    calicost_summary["F1"] = [[F1_dict[e] for e in list_events]]
-                    calicost_summary["true_cna"] = truth_cna_file
-                    calicost_summary["est_cna_file"] = get_calico_cna_file(
-                        configuration_file
-                    )
+        calicost_summary = base_summary.copy()
+        calicost_summary["method"] = "CalicoST"
+        calicost_summary["event"] = [list_events]
+        calicost_summary["F1"] = [[F1_dict[e] for e in list_events]]
+        calicost_summary["true_cna"] = truth_cna_file
+        calicost_summary["est_cna_file"] = get_calico_cna_file(configuration_file)
 
-                    df_event_f1.append(
-                        calicost_summary.explode(["event", "F1"]).reset_index(drop=True)
-                    )
+        df_event_f1.append(
+            calicost_summary.explode(["event", "F1"]).reset_index(drop=True)
+        )
 
-                    # Numbat
-                    numbat_cna_file = get_numbat_cna_file(numbat_dir, sampleid)
+        # Numbat
+        numbat_cna_file = get_numbat_cna_file(numbat_dir, sampleid)
 
-                    numbat_summary = base_summary.copy()
-                    numbat_summary["method"] = "Numbat"
-                    numbat_summary["event"] = [list_events]
-                    numbat_summary["true_cna"] = truth_cna_file
+        numbat_summary = base_summary.copy()
+        numbat_summary["method"] = "Numbat"
+        numbat_summary["event"] = [list_events]
+        numbat_summary["true_cna"] = truth_cna_file
 
-                    if Path(numbat_cna_file).exists():
-                        numbat_gene_cna = read_numbat_gene_cna(numbat_cna_file)
+        if Path(numbat_cna_file).exists():
+            numbat_gene_cna = read_numbat_gene_cna(numbat_cna_file)
 
-                        F1_dict = compute_gene_F1(true_gene_cna, numbat_gene_cna)
+            F1_dict = compute_gene_F1(true_gene_cna, numbat_gene_cna)
 
-                        numbat_summary["F1"] = [[F1_dict[e] for e in list_events]]
-                        numbat_summary["est_cna_file"] = numbat_cna_file
-                    else:
-                        numbat_summary["F1"] = [[0.0 for e in list_events]]
-                        numbat_summary["est_cna_file"] = "-"
+            numbat_summary["F1"] = [[F1_dict[e] for e in list_events]]
+            numbat_summary["est_cna_file"] = numbat_cna_file
+        else:
+            numbat_summary["F1"] = [[0.0 for e in list_events]]
+            numbat_summary["est_cna_file"] = "-"
 
-                    df_event_f1.append(
-                        numbat_summary.explode(["event", "F1"]).reset_index(drop=True)
-                    )
+        df_event_f1.append(
+            numbat_summary.explode(["event", "F1"]).reset_index(drop=True)
+        )
 
-                    # STARCH
-                    starch_cna_file = get_starch_cna_file(starch_dir, sampleid)
-                    starch_gene_cna = read_starch_gene_cna(starch_cna_file)
+        # STARCH
+        starch_cna_file = get_starch_cna_file(starch_dir, sampleid)
+        starch_gene_cna = read_starch_gene_cna(starch_cna_file)
 
-                    F1_dict = compute_gene_F1(true_gene_cna, starch_gene_cna)
+        F1_dict = compute_gene_F1(true_gene_cna, starch_gene_cna)
 
-                    starch_summary = base_summary.copy()
-                    starch_summary["method"] = "STARCH"
-                    starch_summary["event"] = [list_events]
-                    starch_summary["F1"] = [[F1_dict[e] for e in list_events]]
-                    starch_summary["true_cna"] = truth_cna_file
-                    starch_summary["est_cna_file"] = starch_cna_file
+        starch_summary = base_summary.copy()
+        starch_summary["method"] = "STARCH"
+        starch_summary["event"] = [list_events]
+        starch_summary["F1"] = [[F1_dict[e] for e in list_events]]
+        starch_summary["true_cna"] = truth_cna_file
+        starch_summary["est_cna_file"] = starch_cna_file
 
-                    df_event_f1.append(
-                        starch_summary.explode(["event", "F1"]).reset_index(drop=True)
-                    )
+        df_event_f1.append(
+            starch_summary.explode(["event", "F1"]).reset_index(drop=True)
+        )
 
     return pd.concat(df_event_f1, ignore_index=True)
 
