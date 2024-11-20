@@ -8,6 +8,7 @@ from matplotlib import pyplot as plt
 from sklearn.metrics import adjusted_rand_score
 
 from calicost import arg_parse
+from calicost.utils_plotting import plot_rdr_baf as __plot_rdr_baf
 
 
 def read_gene_loc(hg_table_file):
@@ -127,6 +128,34 @@ def get_best_r_hmrf(
     return int(r_hmrf_initialization)
 
 
+# TODO relation to cnv_genelevel.tsv?
+def get_cna_seglevel(calico_pure_dir, sampleid, ploidy="diploid"):
+    # e.g. ../nomixing_calicost_related/numcnas1.2_cnasize1e7_ploidy2_random0/clone3_rectangle0_w1.0/cnv_diploid_seglevel.tsv
+    best_fit = get_best_r_hmrf(get_config_path(calico_pure_dir, sampleid))
+
+    # TODO assumes clone3.
+    return f"{calico_pure_dir}/{sampleid}/clone3_rectangle{best_fit}_w1.0/cnv_{ploidy}_seglevel.tsv"
+
+
+def plot_rdr_baf(configuration_file, calico_pure_dir, n_cnas, cna_size, ploidy, random):
+    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+
+    fig = plot_rdr_baf(
+        configuration_file,
+        get_best_r_hmrf(configuration_file),
+        get_cna_seglevel(calico_pure_dir, sampleid),
+        clone_ids=None,
+        remove_xticks=True,
+        rdr_ylim=5,
+        chrtext_shift=-0.3,
+        base_height=3.2,
+        pointsize=30,
+        palette="tab10",
+    )
+
+    return fig
+
+
 def read_true_gene_cna(df_hgtable, truth_cna_file):
     """
     Read true copy number aberrations
@@ -173,7 +202,9 @@ def read_true_gene_cna(df_hgtable, truth_cna_file):
 def get_calico_cna_file(configuration_file):
     r_calico = get_best_r_hmrf(configuration_file)
 
-    tmpdir = "/".join(configuration_file.split("/")[:-1])
+    # NB parent directory of configuration file.
+    # tmpdir = "/".join(configuration_file.split("/")[:-1])
+    tmpdir = Path(configuration_file).parent
 
     return f"{tmpdir}/clone3_rectangle{r_calico}_w1.0/cnv_genelevel.tsv"
 
