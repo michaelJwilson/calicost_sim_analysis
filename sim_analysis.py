@@ -185,8 +185,6 @@ def plot_rdr_baf(
     # load data
     outdir = f"{calico_pure_dir}/{sampleid}/clone{config['n_clones']}_rectangle{r_hmrf_initialization}_w{config['spatial_weight']:.1f}"
 
-    print(outdir)
-
     dat = np.load(f"{outdir}/binned_data.npz", allow_pickle=True)
     lengths = dat["lengths"]
     single_X = dat["single_X"]
