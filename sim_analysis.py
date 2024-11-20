@@ -171,27 +171,32 @@ def read_true_gene_cna(df_hgtable, truth_cna_file):
     return true_gene_cna
 
 
-def read_calico_gene_cna(configuration_file):
-    """
-    Read CalicoST estimated copy number aberrations.
-    """
+def get_calico_cna_file(configuration_file):
     r_calico = get_best_r_hmrf(configuration_file)
 
     tmpdir = "/".join(configuration_file.split("/")[:-1])
 
+    return f"{tmpdir}/clone3_rectangle{r_calico}_w1.0/cnv_genelevel.tsv"
+
+
+def read_calico_gene_cna(configuration_file):
+    """
+    Read CalicoST estimated copy number aberrations.
+    """
+    calico_cna_file = get_calico_cna_file(configuration_file)
+
     calico_gene_cna = pd.read_csv(
-        f"{tmpdir}/clone3_rectangle{r_calico}_w1.0/cnv_genelevel.tsv",
+        calico_cna_file,
         header=0,
         index_col=0,
         sep="\t",
     )
+
     calico_clones = (
         calico_gene_cna.columns[calico_gene_cna.columns.str.endswith("A")]
         .str.split(" ")
         .str[0]
     )
-
-    # print(f"Found CalicoST clones: {calico_clones}")
 
     for c in calico_clones:
         cna_type_assay = np.array(["NEU"] * calico_gene_cna.shape[0], dtype="<U5")
@@ -199,6 +204,7 @@ def read_calico_gene_cna(configuration_file):
         cna_type_assay[
             calico_gene_cna[f"{c} A"].values + calico_gene_cna[f"{c} B"].values < 2
         ] = "DEL"
+
         cna_type_assay[
             calico_gene_cna[f"{c} A"].values + calico_gene_cna[f"{c} B"].values > 2
         ] = "AMP"
@@ -206,6 +212,7 @@ def read_calico_gene_cna(configuration_file):
         is_cnloh = (
             calico_gene_cna[f"{c} A"].values + calico_gene_cna[f"{c} B"].values == 2
         ) & (calico_gene_cna[f"{c} A"].values != calico_gene_cna[f"{c} B"].values)
+
         cna_type_assay[is_cnloh] = "CNLOH"
 
         calico_gene_cna[f"{c}_type"] = cna_type_assay
@@ -656,6 +663,18 @@ def plot_aris(df_clone_ari):
     fig.show()
 
 
+def get_truth_cna_file(true_dir, sampleid):
+    return f"{true_dir}/{sampleid}/truth_cna.tsv"
+
+
+def get_numbat_cna_file(numbat_dir, sampleid):
+    return f"{numbat_dir}/{sampleid}/outs/bulk_clones_final.tsv.gz"
+
+
+def get_starch_cna_file(starch_dir, sampleid):
+    return f"{starch_dir}/{sampleid}/states_STITCH_output.csv"
+
+
 def get_f1s(true_dir, df_hgtable, calico_pure_dir, numbat_dir, starch_dir):
     # EG 6 shared CNAs and 3 clone specific.
     sim_params = get_sim_params()
@@ -669,7 +688,7 @@ def get_f1s(true_dir, df_hgtable, calico_pure_dir, numbat_dir, starch_dir):
                 for random in sim_params["all_random"]:
                     sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
 
-                    truth_cna_file = f"{true_dir}/{sampleid}/truth_cna.tsv"
+                    truth_cna_file = get_truth_cna_file(true_dir, sampleid)
                     true_gene_cna = read_true_gene_cna(df_hgtable, truth_cna_file)
 
                     base_summary = get_base_sim_summary(
@@ -682,89 +701,57 @@ def get_f1s(true_dir, df_hgtable, calico_pure_dir, numbat_dir, starch_dir):
 
                     F1_dict = compute_gene_F1(true_gene_cna, calico_gene_cna)
 
+                    calicost_summary = base_summary.copy()
+                    calicost_summary["method"] = "CalicoST"
+                    calicost_summary["event"] = [list_events]
+                    calicost_summary["F1"] = [[F1_dict[e] for e in list_events]]
+                    calicost_summary["true_cna"] = truth_cna_file
+                    calicost_summary["est_cna_file"] = get_calico_cna_file(
+                        configuration_file
+                    )
+
                     df_event_f1.append(
-                        pd.DataFrame(
-                            {
-                                "cnas": f"{n_cnas[0], n_cnas[1]}",
-                                "n_cnas": n_cnas[0] + n_cnas[1],
-                                "cna_size": cna_size,
-                                "random": random,
-                                "ploidy": int(ploidy),
-                                "sample_id": sampleid,
-                                "method": "CalicoST",
-                                "event": list_events,
-                                "F1": [F1_dict[e] for e in list_events],
-                                "true_cna": truth_cna_file,
-                            }
-                        )
+                        calicost_summary.explode(["event", "F1"]).reset_index(drop=True)
                     )
 
                     # Numbat
-                    bulk_clones_final_file = (
-                        f"{numbat_dir}/{sampleid}/outs/bulk_clones_final.tsv.gz"
-                    )
+                    numbat_cna_file = get_numbat_cna_file(numbat_dir, sampleid)
 
-                    if Path(bulk_clones_final_file).exists():
-                        numbat_gene_cna = read_numbat_gene_cna(bulk_clones_final_file)
+                    numbat_summary = base_summary.copy()
+                    numbat_summary["method"] = "Numbat"
+                    numbat_summary["event"] = [list_events]
+                    numbat_summary["true_cna"] = truth_cna_file
+
+                    if Path(numbat_cna_file).exists():
+                        numbat_gene_cna = read_numbat_gene_cna(numbat_cna_file)
 
                         F1_dict = compute_gene_F1(true_gene_cna, numbat_gene_cna)
 
-                        df_event_f1.append(
-                            pd.DataFrame(
-                                {
-                                    "cnas": f"{n_cnas[0], n_cnas[1]}",
-                                    "n_cnas": n_cnas[0] + n_cnas[1],
-                                    "cna_size": cna_size,
-                                    "random": random,
-                                    "ploidy": int(ploidy),
-                                    "sample_id": sampleid,
-                                    "method": "Numbat",
-                                    "event": list_events,
-                                    "F1": [F1_dict[e] for e in list_events],
-                                    "true_cna": truth_cna_file,
-                                }
-                            )
-                        )
+                        numbat_summary["F1"] = [[F1_dict[e] for e in list_events]]
+                        numbat_summary["est_cna_file"] = numbat_cna_file
                     else:
-                        df_event_f1.append(
-                            pd.DataFrame(
-                                {
-                                    "cnas": f"{n_cnas[0], n_cnas[1]}",
-                                    "n_cnas": n_cnas[0] + n_cnas[1],
-                                    "cna_size": cna_size,
-                                    "random": random,
-                                    "ploidy": int(ploidy),
-                                    "sample_id": sampleid,
-                                    "method": "Numbat",
-                                    "event": list_events,
-                                    "F1": [0 for e in list_events],
-                                    "true_cna": truth_cna_file,
-                                }
-                            )
-                        )
+                        numbat_summary["F1"] = [[0.0 for e in list_events]]
+                        numbat_summary["est_cna_file"] = "-"
+
+                    df_event_f1.append(
+                        numbat_summary.explode(["event", "F1"]).reset_index(drop=True)
+                    )
 
                     # STARCH
-                    states_file = f"{starch_dir}/{sampleid}/states_STITCH_output.csv"
-
-                    starch_gene_cna = read_starch_gene_cna(states_file)
+                    starch_cna_file = get_starch_cna_file(starch_dir, sampleid)
+                    starch_gene_cna = read_starch_gene_cna(starch_cna_file)
 
                     F1_dict = compute_gene_F1(true_gene_cna, starch_gene_cna)
 
+                    starch_summary = base_summary.copy()
+                    starch_summary["method"] = "STARCH"
+                    starch_summary["event"] = [list_events]
+                    starch_summary["F1"] = [[F1_dict[e] for e in list_events]]
+                    starch_summary["true_cna"] = truth_cna_file
+                    starch_summary["est_cna_file"] = starch_cna_file
+
                     df_event_f1.append(
-                        pd.DataFrame(
-                            {
-                                "cnas": f"{n_cnas[0], n_cnas[1]}",
-                                "n_cnas": n_cnas[0] + n_cnas[1],
-                                "cna_size": cna_size,
-                                "random": random,
-                                "ploidy": int(ploidy),
-                                "sample_id": sampleid,
-                                "method": "STARCH",
-                                "event": list_events,
-                                "F1": [F1_dict[e] for e in list_events],
-                                "true_cna": truth_cna_file,
-                            }
-                        )
+                        starch_summary.explode(["event", "F1"]).reset_index(drop=True)
                     )
 
     return pd.concat(df_event_f1, ignore_index=True)
