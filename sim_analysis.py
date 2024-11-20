@@ -411,11 +411,11 @@ def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
     labels = true_clones["true_clone"].unique()
     labels = np.array(sorted(labels, key=__normal_clone_sorter))
 
-    plt.figure(figsize=(3, 3))
+    fig, ax = plt.subplots(figsize=(3, 3))
 
     palette = sns.color_palette()
 
-    ax = sns.scatterplot(
+    sns.scatterplot(
         data=true_clones,
         x="x",
         y="y",
@@ -444,7 +444,7 @@ def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
         frameon=False,
     )
 
-    plt.show()
+    return fig
 
 
 def get_calico_clones_path(calico_pure_dir, n_cnas, cna_size, ploidy, random):
@@ -492,11 +492,11 @@ def plot_calico_clones(
     labels = calico_clones["est_clone"].unique()
     labels = np.array(sorted(labels, key=__normal_clone_sorter))
 
-    plt.figure(figsize=(3, 3))
+    fig, ax = plt.subplots(figsize=(3, 3))
 
     palette = sns.color_palette()
 
-    ax = sns.scatterplot(
+    sns.scatterplot(
         data=calico_clones,
         x="x",
         y="y",
@@ -509,8 +509,15 @@ def plot_calico_clones(
     handles, labels = ax.get_legend_handles_labels()
     labels = [rf"$C_{l}$" for l in labels]
 
+    ari = adjusted_rand_score(
+        calico_clones.est_clone,
+        calico_clones.true_clone,
+    )
+
     ax.set_title(
-        f"{n_cnas[0]}/{n_cnas[0]} ({cna_size} MB), {random} real." + r" $\hat \ell$",
+        f"{n_cnas[0]}/{n_cnas[0]} ({cna_size} MB), {random} real."
+        + r" $\hat \ell$;"
+        + f" ARI={ari:.2f}",
         fontsize=10,
     )
 
@@ -526,7 +533,7 @@ def plot_calico_clones(
         frameon=False,
     )
 
-    plt.show()
+    return fig
 
 
 def get_numbat_path(numbat_dir, sampleid):
@@ -611,6 +618,15 @@ def get_base_sim_summary(n_cnas, cna_size, ploidy, random, sampleid, true_path):
     )
 
 
+def get_pair_recall(est_label, true_label):
+    # NB not distinct pairs,
+    #    see https://scikit-learn.org/dev/modules/generated/sklearn.metrics.cluster.pair_confusion_matrix.html
+    confusion = pair_confusion_matrix(true_label, est_label)
+    _, cnts = np.unique(true_label, return_counts=True)
+
+    return confusion[1, 1] / (cnts * (cnts - 1)).sum()
+
+
 def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
     sim_params = get_sim_params()
     df_clone_ari = []
@@ -639,7 +655,13 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
         # TODO "r_calico": r_calico,
         calicost_summary = base_summary.copy()
         calicost_summary["method"] = "CalicoST"
-        calicost_summary["ARI"] = adjusted_rand_score(
+
+        # NB fraction of all spot pairs that share a clone in truth, and share a clone in estimation.
+        calicost_summary["recall"] = get_pair_recall(
+            calico_pure_clones.est_clone, calico_pure_clones.true_clone
+        )
+
+        calicost_summary["ari"] = adjusted_rand_score(
             calico_pure_clones.est_clone,
             calico_pure_clones.true_clone,
         )
@@ -657,13 +679,13 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
 
         if numbat_clones is not None:
             numbat_clones = numbat_clones.join(true_clones)
-            numbat_summary["ARI"] = adjusted_rand_score(
+            numbat_summary["ari"] = adjusted_rand_score(
                 numbat_clones.est_clone,
                 numbat_clones.true_clone,
             )
 
         else:
-            numbat_summary["ARI"] = 0.0
+            numbat_summary["ari"] = 0.0
             numbat_summary["best_fit_clones_path"] = "-"
 
         df_clone_ari.append(numbat_summary)
@@ -677,7 +699,7 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
 
         starch_summary = base_summary.copy()
         starch_summary["method"] = "STARCH"
-        starch_summary["ARI"] = adjusted_rand_score(
+        starch_summary["ari"] = adjusted_rand_score(
             starch_clones.est_clone,
             starch_clones.true_clone,
         )
@@ -704,15 +726,17 @@ def plot_aris(df_clone_ari):
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True, dpi=300)
     color_methods = ["#4963C1", "#97b085", "#dad67d"]
 
+    palette = sns.color_palette()
+
     for i, n_cnas in enumerate([3, 6, 9]):
         tmpdf = df_clone_ari[df_clone_ari.n_cnas == n_cnas]
 
         sns.boxplot(
             data=tmpdf,
             x="cna_size",
-            y="ARI",
+            y="ari",
             hue="method",
-            palette=sns.color_palette(color_methods),
+            palette=palette,
             boxprops=dict(alpha=0.7),
             linewidth=1,
             showfliers=False,
@@ -722,9 +746,9 @@ def plot_aris(df_clone_ari):
         sns.stripplot(
             data=tmpdf,
             x="cna_size",
-            y="ARI",
+            y="ari",
             hue="method",
-            palette=sns.color_palette(color_methods),
+            palette=palette,
             dodge=10,
             edgecolor="black",
             linewidth=0.5,
