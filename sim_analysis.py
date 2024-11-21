@@ -15,6 +15,9 @@ from calicost.utils_hmrf import merge_pseudobulk_by_index, merge_pseudobulk_by_i
 from calicost.utils_phase_switch import get_intervals
 
 
+__cnasize_mapper = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb"}
+
+
 def get_gene_loc_path(calico_repo_dir):
     return f"{calico_repo_dir}/GRCh38_resources/hgTables_hg38_gencode.txt"
 
@@ -904,22 +907,34 @@ def __normal_clone_sorter(x):
     return (x != "normal", x)
 
 
-def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
-    true_clones = get_true_clones(true_dir, n_cnas, cna_size, ploidy, random)
-    true_clones["true_clone"] = true_clones["true_clone"].str.replace("normal", "N")
+def plot_clones(clones, n_cnas, cna_size, ploidy, random, truth=False):
+    clones = clones.copy()
 
-    labels = true_clones["true_clone"].unique()
+    column = "true_clone" if truth else "est_clone"
+    clones[column] = clones[column].astype("str").str.replace("normal", "N")
+
+    labels = clones[column].unique()
     labels = np.array(sorted(labels, key=__normal_clone_sorter))
+
+    title = f"{n_cnas[0]}/{n_cnas[0]} ({cna_size} MB), {random} real." + r" $\ell$"
+
+    if not truth:
+        ari = adjusted_rand_score(
+            clones.est_clone,
+            clones.true_clone,
+        )
+
+        title += f" ARI={ari:.2f}"
 
     fig, ax = plt.subplots(figsize=(3, 3))
 
     palette = sns.color_palette()
 
     sns.scatterplot(
-        data=true_clones,
+        data=clones,
         x="x",
         y="y",
-        hue="true_clone",
+        hue=column,
         hue_order=labels,
         s=10,
         palette=palette,
@@ -929,7 +944,7 @@ def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
     labels = [rf"$C_{l}$" for l in labels]
 
     ax.set_title(
-        f"{n_cnas[0]}/{n_cnas[0]} ({cna_size} MB), {random} real." + r" $\ell$",
+        title,
         fontsize=10,
     )
     ax.set_xlabel("X", fontsize=8)
@@ -986,60 +1001,6 @@ def get_calico_clones(
         calico_clones = calico_clones.join(true_clones)
 
     return calico_clones
-
-
-def plot_calico_clones(
-    calico_pure_dir, n_cnas, cna_size, ploidy, random, true_dir, verbose=False
-):
-    calico_clones = get_calico_clones(
-        calico_pure_dir, n_cnas, cna_size, ploidy, random, true_dir=true_dir
-    )
-
-    labels = calico_clones["est_clone"].unique()
-    labels = np.array(sorted(labels, key=__normal_clone_sorter))
-
-    fig, ax = plt.subplots(figsize=(3, 3))
-
-    palette = sns.color_palette()
-
-    sns.scatterplot(
-        data=calico_clones,
-        x="x",
-        y="y",
-        hue="est_clone",
-        hue_order=labels,
-        s=10,
-        palette=palette,
-    )
-
-    handles, labels = ax.get_legend_handles_labels()
-    labels = [rf"$C_{l}$" for l in labels]
-
-    ari = adjusted_rand_score(
-        calico_clones.est_clone,
-        calico_clones.true_clone,
-    )
-
-    ax.set_title(
-        f"{n_cnas[0]}/{n_cnas[0]} ({cna_size} MB), {random} real."
-        + r" $\hat \ell$;"
-        + f" ARI={ari:.2f}",
-        fontsize=10,
-    )
-
-    ax.set_xlabel("X", fontsize=8)
-    ax.set_ylabel("Y", fontsize=8)
-    ax.tick_params(axis="both", which="major", labelsize=8)
-    ax.legend(
-        handles,
-        labels,
-        bbox_to_anchor=(1.05, 1),
-        loc="upper left",
-        fontsize=8,
-        frameon=False,
-    )
-
-    return fig
 
 
 def get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random):
@@ -1107,17 +1068,17 @@ def get_starch_clones(
         starch_clones.index = starch_clones.index.map(map_index)
         starch_clones.index.name = "spot"
 
+        starch_clones = starch_clones.join(true_clones)
+
     return starch_clones
 
 
 def get_base_sim_summary(n_cnas, cna_size, ploidy, random, sampleid, true_path):
-    map_cnasize = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb"}
-
     return pd.DataFrame(
         {
             "cnas": f"{n_cnas[0], n_cnas[1]}",
             "n_cnas": n_cnas[0] + n_cnas[1],
-            "cna_size": map_cnasize[cna_size],
+            "cna_size": __cnasize_mapper[cna_size],
             "ploidy": int(ploidy),
             "random": random,
             "sample_id": sampleid,
