@@ -204,6 +204,7 @@ def plot_rdr_baf(
     sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
 
     cna_path = get_cna_seglevel_path(calico_pure_dir, sampleid, r_hmrf_initialization)
+    df_cnv = get_cna_seglevel(calico_pure_dir, sampleid, r_hmrf_initialization)
 
     chisel_palette, ordered_acn = get_full_palette()
     map_cn = {x: i for i, x in enumerate(ordered_acn)}
@@ -222,7 +223,7 @@ def plot_rdr_baf(
         [(cid in final_clone_ids) for cid in clone_ids]
     )
 
-    unique_chrs = np.unique(df_cnv.CHR.values)
+    unique_chrs = np.unique(df_cnv.chr.values)
 
     # load data
     outdir = f"{calico_pure_dir}/{sampleid}/clone{config['n_clones']}_rectangle{r_hmrf_initialization}_w{config['spatial_weight']:.1f}"
@@ -279,10 +280,10 @@ def plot_rdr_baf(
             cid = final_clone_ids[c]
             # major and minor allele copies give the hue
             major = np.maximum(
-                df_cnv[f"clone{cid} A"].values, df_cnv[f"clone{cid} B"].values
+                df_cnv[f"clone{cid} a"].values, df_cnv[f"clone{cid} b"].values
             )
             minor = np.minimum(
-                df_cnv[f"clone{cid} A"].values, df_cnv[f"clone{cid} B"].values
+                df_cnv[f"clone{cid} a"].values, df_cnv[f"clone{cid} b"].values
             )
 
             # plot points
@@ -421,10 +422,10 @@ def plot_rdr_baf(
 
             # major and minor allele copies give the hue
             major = np.maximum(
-                df_cnv[f"clone{cid} A"].values, df_cnv[f"clone{cid} B"].values
+                df_cnv[f"clone{cid} a"].values, df_cnv[f"clone{cid} b"].values
             )
             minor = np.minimum(
-                df_cnv[f"clone{cid} A"].values, df_cnv[f"clone{cid} B"].values
+                df_cnv[f"clone{cid} a"].values, df_cnv[f"clone{cid} b"].values
             )
 
             # plot points
