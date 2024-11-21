@@ -15,7 +15,7 @@ from calicost.utils_hmrf import merge_pseudobulk_by_index, merge_pseudobulk_by_i
 from calicost.utils_phase_switch import get_intervals
 
 
-__cnasize_mapper = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb"}
+__cnasize_mapper = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb", "-1": ""}
 
 
 def path_not_exists(path):
@@ -1460,33 +1460,21 @@ def plot_cna_f1s(df_event_f1):
     )
 
     fig, axes = plt.subplots(4, 3, figsize=figsize, dpi=300)
-    colors = ["#4963C1", "#97b085", "#dad67d"]
-    palette = sns.color_palette(colors)
 
-    for i, cnasize in enumerate(sim_params["all_cna_sizes"][::-1]):
+    # palette = sns.color_palette(["#4963C1", "#97b085", "#dad67d"])
+    palette = sns.color_palette()
+
+    for i, cnasize in enumerate(sim_params["all_cna_sizes"][::-1] + ["-1"]):
         for j, n_cnas in enumerate(sim_params["all_n_cnas"]):
             num_n_cnas = sum(n_cnas)
 
             isin = df_event_f1.n_cnas == num_n_cnas
-            isin &= df_event_f1.cna_size == __cnasize_mapper[cnasize]
+
+            if cnasize != "-1":
+                isin &= df_event_f1.cna_size == __cnasize_mapper[cnasize]
 
             tmpdf = df_event_f1[isin]
 
-            if len(tmpdf) == 0:
-                continue
-            """
-            sns.scatterplot(
-                data=tmpdf,
-                x="event",
-                y="F1",
-                hue="method",
-                palette=palette,
-                s=10,
-                edgecolor="black",
-                linewidth=0.5,
-                ax=axes[i,j],
-            )
-            """
             sns.boxplot(
                 data=tmpdf,
                 x="event",
@@ -1520,7 +1508,7 @@ def plot_cna_f1s(df_event_f1):
         axes[i, 0].set_ylabel(f"{__cnasize_mapper[cnasize]}" + r" $F_1$")
 
     h, l = axes[-1, -1].get_legend_handles_labels()
-    axes[-1, -1].legend(
+    axes[0, 2].legend(
         h[:3], l[:3], loc="upper left", bbox_to_anchor=(1, 1), frameon=False
     )
 
