@@ -845,7 +845,7 @@ def read_starch_gene_cna(states_file):
 
 
 # TODO BUG null_value=0.0 -> null_value=np.nan
-def compute_gene_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
+def compute_cna_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
     """
     Compute the F1 score of CNA-affected gene prediction.
 
@@ -883,7 +883,7 @@ def compute_gene_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
             )
 
             true_columns = true_gene_cna.columns[
-                true_gene_cna.columns.str.endswith("_type")
+                true_gene_cna.columns.str.endswith("_ctype")
             ]
             true_event_genes = set(true_gene_cna.index) - set(
                 true_gene_cna.index[
@@ -1393,12 +1393,12 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
         )
 
         if calico_gene_cna is not None:
-            F1_dict = compute_gene_F1(true_gene_cna, calico_gene_cna)
+            F1s = compute_cna_F1(true_gene_cna, calico_gene_cna)
 
             calicost_summary = base_summary.copy()
             calicost_summary["method"] = "CalicoST"
             calicost_summary["event"] = [list_events]
-            calicost_summary["F1"] = [[F1_dict[e] for e in list_events]]
+            calicost_summary["F1"] = [[F1s[e] for e in list_events]]
             calicost_summary["true_cna"] = truth_cna_file
             calicost_summary["est_cna_file"] = get_calico_cna_file(
                 calico_dir, n_cnas, cna_size, ploidy, random, best_run_initialization
@@ -1419,9 +1419,9 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
         if Path(numbat_cna_file).exists():
             numbat_gene_cna = read_numbat_gene_cna(numbat_cna_file)
 
-            F1_dict = compute_gene_F1(true_gene_cna, numbat_gene_cna)
+            F1s = compute_cna_F1(true_gene_cna, numbat_gene_cna)
 
-            numbat_summary["F1"] = [[F1_dict[e] for e in list_events]]
+            numbat_summary["F1"] = [[F1s[e] for e in list_events]]
             numbat_summary["est_cna_file"] = numbat_cna_file
         else:
             numbat_summary["F1"] = [[0.0 for e in list_events]]
@@ -1435,12 +1435,12 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
         starch_cna_file = get_starch_cna_file(starch_dir, simid)
         starch_gene_cna = read_starch_gene_cna(starch_cna_file)
 
-        F1_dict = compute_gene_F1(true_gene_cna, starch_gene_cna)
+        F1s = compute_cna_F1(true_gene_cna, starch_gene_cna)
 
         starch_summary = base_summary.copy()
         starch_summary["method"] = "Starch"
         starch_summary["event"] = [list_events]
-        starch_summary["F1"] = [[F1_dict[e] for e in list_events]]
+        starch_summary["F1"] = [[F1s[e] for e in list_events]]
         starch_summary["true_cna"] = truth_cna_file
         starch_summary["est_cna_file"] = starch_cna_file
 
