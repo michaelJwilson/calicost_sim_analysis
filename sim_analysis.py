@@ -131,12 +131,29 @@ def get_best_r_hmrf(
 
 
 # TODO relation to cnv_genelevel.tsv?
-def get_cna_seglevel(
+def get_cna_seglevel_path(
     calico_pure_dir, sampleid, r_hmrf_initialization, ploidy="diploid"
 ):
     # TODO assumes clone3.
     # e.g. ../nomixing_calicost_related/numcnas1.2_cnasize1e7_ploidy2_random0/clone3_rectangle0_w1.0/cnv_diploid_seglevel.tsv
     return f"{calico_pure_dir}/{sampleid}/clone3_rectangle{r_hmrf_initialization}_w1.0/cnv_{ploidy}_seglevel.tsv"
+
+
+def get_cna_seglevel(
+    calico_pure_dir,
+    sampleid,
+    r_hmrf_initialization,
+    ploidy="diploid",
+    non_neutral_only=False,
+):
+    cna_seglevel_path = get_cna_seglevel_path(
+        calico_pure_dir, sampleid, r_hmrf_initialization, ploidy=ploidy
+    )
+
+    if non_neutral_only:
+        pass
+
+    return pd.read_csv(cna_seglevel_path, header=0, sep="\t")
 
 
 def plot_rdr_baf(
@@ -160,7 +177,7 @@ def plot_rdr_baf(
 
     sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
 
-    cn_file = get_cna_seglevel(calico_pure_dir, sampleid, r_hmrf_initialization)
+    cna_path = get_cna_seglevel_path(calico_pure_dir, sampleid, r_hmrf_initialization)
 
     chisel_palette, ordered_acn = get_full_palette()
     map_cn = {x: i for i, x in enumerate(ordered_acn)}
@@ -171,8 +188,6 @@ def plot_rdr_baf(
     except:
         config = arg_parse.read_joint_configuration_file(configuration_file)
 
-    # load allele specific integer copy numbers
-    df_cnv = pd.read_csv(cn_file, header=0, sep="\t")
     final_clone_ids = np.unique([x.split(" ")[0][5:] for x in df_cnv.columns[3:]])
 
     if not "0" in final_clone_ids:
@@ -180,6 +195,7 @@ def plot_rdr_baf(
     assert (clone_ids is None) or np.all(
         [(cid in final_clone_ids) for cid in clone_ids]
     )
+
     unique_chrs = np.unique(df_cnv.CHR.values)
 
     # load data
