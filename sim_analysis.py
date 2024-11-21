@@ -139,6 +139,29 @@ def get_cna_seglevel_path(
     return f"{calico_pure_dir}/{sampleid}/clone3_rectangle{r_hmrf_initialization}_w1.0/cnv_{ploidy}_seglevel.tsv"
 
 
+def filter_non_netural(cna_frame):
+    """
+    Filter out neutral CNAs.
+    """
+    columns = cna_frame.columns
+
+    isin = columns.str.contains("clone")
+    isin &= [not xx for xx in columns.str.contains("type")]
+
+    clones = columns[isin].values
+
+    isin, isglobal = [], []
+
+    for index, row in cna_frame.iterrows():
+        isin.append(not np.all(row[clones] == 1))
+        isglobal.append(row.nunique() == 1)
+
+    cna_seglevel = cna_frame[isin].reset_index(drop=True)
+    cna_seglevel["global_cna"] = np.array(isglobal)[isin]
+
+    return cna_seglevel
+
+
 def get_cna_seglevel(
     calico_pure_dir,
     sampleid,
@@ -150,10 +173,13 @@ def get_cna_seglevel(
         calico_pure_dir, sampleid, r_hmrf_initialization, ploidy=ploidy
     )
 
-    if non_neutral_only:
-        pass
+    cna_seglevel = pd.read_csv(cna_seglevel_path, header=0, sep="\t")
+    cna_seglevel.columns = [xx.lower() for xx in cna_seglevel.columns]
 
-    return pd.read_csv(cna_seglevel_path, header=0, sep="\t")
+    if non_neutral_only:
+        cna_seglevel = filter_non_netural(cna_seglevel)
+
+    return cna_seglevel
 
 
 def plot_rdr_baf(
@@ -533,7 +559,7 @@ def plot_rdr_baf(
     return fig
 
 
-def read_true_gene_cna(df_hgtable, truth_cna_file):
+def read_true_gene_cna(df_hgtable, truth_cna_file, non_neutral_only=False):
     """
     Read true copy number aberrations
     """
@@ -544,6 +570,9 @@ def read_true_gene_cna(df_hgtable, truth_cna_file):
 
     for clonename in unique_clones:
         clonal_cna = df_cna[df_cna.index == clonename]
+
+        gene_A = np.array([1] * true_gene_cna.shape[0])
+        gene_B = np.array([1] * true_gene_cna.shape[0])
 
         gene_status_str = np.array(["1|1"] * true_gene_cna.shape[0])
 
@@ -567,11 +596,22 @@ def read_true_gene_cna(df_hgtable, truth_cna_file):
             is_affected &= true_gene_cna.end >= clonal_cna.start.values[i]
             is_affected &= true_gene_cna.start <= clonal_cna.end.values[i]
 
+            gene_A[is_affected] = clonal_cna.A_copy.values[i]
+            gene_B[is_affected] = clonal_cna.B_copy.values[i]
+
             gene_status_str[is_affected] = cna_str
             gene_status_type[is_affected] = cna_type
 
-        true_gene_cna[f"{clonename}_str"] = gene_status_str
-        true_gene_cna[f"{clonename}_type"] = gene_status_type
+        clonename = clonename.replace("_", "")
+
+        true_gene_cna[f"{clonename} a"] = gene_A
+        true_gene_cna[f"{clonename} b"] = gene_B
+
+        true_gene_cna[f"{clonename}_gtype"] = gene_status_str
+        true_gene_cna[f"{clonename}_ctype"] = gene_status_type
+
+    if non_neutral_only:
+        true_gene_cna = filter_non_netural(true_gene_cna)
 
     return true_gene_cna
 
@@ -762,28 +802,26 @@ def get_sim_run_generator():
                     yield n_cnas, cna_size, ploidy, random
 
 
-def get_sim_runs():
-    run_info = []
-
-    for n_cnas, cna_size, ploidy, random in get_sim_run_generator():
-        run_info.append(
-            {
-                "n_cnas": n_cnas,
-                "cna_size": cna_size,
-                "ploidy": ploidy,
-                "random": random,
-                "sampleid": f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}",
-            }
-        )
-
-    return pd.DataFrame(run_info)
-
-
 def get_sampleid(n_cnas, cna_size, ploidy, random):
     """
     Generate sampleid based on the number of CNAs - (global, shared) - CNA size, ploidy, and random seed.
     """
     return f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+
+
+def get_sim_runs():
+    return pd.DataFrame(
+        [
+            {
+                "n_cnas": n_cnas,
+                "cna_size": cna_size,
+                "ploidy": ploidy,
+                "random": random,
+                "sampleid": get_sampleid(n_cnas, cna_size, ploidy, random),
+            }
+            for n_cnas, cna_size, ploidy, random in get_sim_run_generator()
+        ]
+    )
 
 
 def get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random):
