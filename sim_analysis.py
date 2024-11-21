@@ -898,7 +898,9 @@ def get_true_clones(true_dir, n_cnas, cna_size, ploidy, random, verbose=False):
     true_clones.index = true_clones.index.str.replace("spot_", "")
     true_clones.index.name = "spot"
 
-    true_clones["true_clone"] = true_clones["true_clone"].str.replace("clone_", "")
+    true_clones["true_clone"] = (
+        true_clones["true_clone"].str.replace("clone_", "").str.replace("normal", "N")
+    )
 
     return true_clones
 
@@ -911,7 +913,6 @@ def plot_clones(clones, n_cnas, cna_size, ploidy, random, truth=False):
     clones = clones.copy()
 
     column = "true_clone" if truth else "est_clone"
-    clones[column] = clones[column].astype("str").str.replace("normal", "N")
 
     labels = clones[column].unique()
     labels = np.array(sorted(labels, key=__normal_clone_sorter))
@@ -1008,7 +1009,9 @@ def get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random):
     return f"{numbat_dir}/{sampleid}/outs/clone_post_2.tsv"
 
 
-def get_numbat_clones(numbat_dir, n_cnas, cna_size, ploidy, random, verbose=False):
+def get_numbat_clones(
+    numbat_dir, n_cnas, cna_size, ploidy, random, true_clones=None, verbose=False
+):
     numbat_path = get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random)
 
     if Path(numbat_path).exists():
@@ -1029,7 +1032,12 @@ def get_numbat_clones(numbat_dir, n_cnas, cna_size, ploidy, random, verbose=Fals
 
         numbat_clones.index = numbat_clones.index.str.replace("spot_", "")
         numbat_clones.index.name = "spot"
+
+        if true_clones is not None:
+            numbat_clones = numbat_clones.join(true_clones)
+
     else:
+        warnings.warn(f"\n{numbat_path} does not exist.")
         numbat_clones = None
 
     return numbat_clones
@@ -1097,7 +1105,7 @@ def get_pair_recall(est_label, true_label):
     return confusion[1, 1] / (cnts * (cnts - 1)).sum()
 
 
-def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
+def get_clone_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
     sim_params = get_sim_params()
     df_clone_ari = []
 
@@ -1105,7 +1113,6 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
         true_path = get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random)
         true_clones = get_true_clones(true_dir, n_cnas, cna_size, ploidy, random)
 
-        # sampleid = f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
         sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
 
         # CalicoST
@@ -1140,8 +1147,8 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
         df_clone_ari.append(calicost_summary)
 
         # Numbat
-        numbat_path = get_numbat_path(numbat_dir, sampleid)
-        numbat_clones = get_numbat_clones(numbat_dir, sampleid)
+        numbat_path = get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random)
+        numbat_clones = get_numbat_clones(numbat_dir, n_cnas, cna_size, ploidy, random)
 
         numbat_summary = base_summary.copy()
         numbat_summary["method"] = "Numbat"
@@ -1161,10 +1168,12 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
         df_clone_ari.append(numbat_summary)
 
         # STARCH
-        starch_path = get_starch_path(starch_dir, sampleid)
+        starch_path = get_starch_path(starch_dir, n_cnas, cna_size, ploidy, random)
 
-        starch_clones = get_starch_clones(starch_dir, sampleid, true_clones)
-        starch_clones = starch_clones.join(true_clones)
+        starch_clones = get_starch_clones(
+            starch_dir, n_cnas, cna_size, ploidy, random, true_clones
+        )
+        # starch_clones = starch_clones.join(true_clones)
 
         starch_summary = base_summary.copy()
         starch_summary["method"] = "Starch"
