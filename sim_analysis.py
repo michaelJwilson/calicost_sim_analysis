@@ -95,6 +95,15 @@ def get_results_dir_path(calico_pure_dir, n_cnas, cna_size, ploidy, random):
     return f"{calico_pure_dir}/{sampleid}/clone{config['n_clones']}_rectangle{random}_w{config['spatial_weight']:.1f}"
 
 
+def get_rdrbaf_path(calico_pure_dir, n_cnas, cna_size, ploidy, random):
+    config = get_config(calico_pure_dir, n_cnas, cna_size, ploidy, random)
+    results_dir_path = get_results_dir_path(
+        calico_pure_dir, n_cnas, cna_size, ploidy, random
+    )
+
+    return f"{results_dir_path}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
+
+
 def get_rdrbaf(
     calico_pure_dir,
     n_cnas,
@@ -110,26 +119,15 @@ def get_rdrbaf(
         calico_pure_dir, n_cnas, cna_size, ploidy, random, verbose=verbose
     )
 
-    results_dir_path = get_results_dir_path(
-        calico_pure_dir, n_cnas, cna_size, ploidy, random
-    )
+    rdrbaf_path = get_rdrbaf_path(calico_pure_dir, n_cnas, cna_size, ploidy, random)
 
-    fpath = f"{results_dir_path}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
-
-    if Path(fpath).exists():
-        res_combine = dict(
-            np.load(
-                f"{results_dir_path}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
-            ),
+    if Path(rdrbaf_path).exists():
+        return dict(
+            np.load(rdrbaf_path),
             allow_pickle=True,
         )
-
-        return res_combine
     else:
-        if verbose:
-            warnings.warning(
-                f"CalicoST RDR/BAF determinations do not exist for {fpath}"
-            )
+        warnings.warn(f"CalicoST RDR/BAF determinations do not exist for {rdrbaf_path}")
 
         return None
 
@@ -171,13 +169,24 @@ def get_best_r_hmrf(
                     index=[0],
                 )
             )
+        else:
+            rdrbaf_path = get_rdrbaf_path(
+                calico_pure_dir, n_cnas, cna_size, ploidy, random
+            )
 
-    df_clone = pd.concat(df_clone, ignore_index=True)
-    idx = np.argmax(df_clone["log-likelihood"])
+            warnings.warn(f"{rdrbaf_path} does not exist.")
 
-    r_hmrf_initialization = df_clone["random seed"].iloc[idx]
+    df_clone = pd.concat(df_clone, ignore_index=True) if len(df_clone) > 0 else None
 
-    return int(r_hmrf_initialization)
+    if df_clone is None:
+        return -1
+
+    else:
+        idx = np.argmax(df_clone["log-likelihood"])
+
+        r_hmrf_initialization = df_clone["random seed"].iloc[idx]
+
+        return int(r_hmrf_initialization)
 
 
 # TODO relation to cnv_genelevel.tsv?
