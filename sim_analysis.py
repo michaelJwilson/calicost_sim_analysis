@@ -1,16 +1,22 @@
 from pathlib import Path
 
+import warnings
 import numpy as np
 import pandas as pd
 import scanpy as sc
 import seaborn as sns
 from matplotlib import pyplot as plt
 from sklearn.metrics import adjusted_rand_score
+from sklearn.metrics.cluster import pair_confusion_matrix
 
 from calicost import arg_parse
 from calicost.utils_plotting import get_full_palette
 from calicost.utils_hmrf import merge_pseudobulk_by_index, merge_pseudobulk_by_index_mix
 from calicost.utils_phase_switch import get_intervals
+
+
+def get_gene_loc_path(calico_repo_dir):
+    return f"{calico_repo_dir}/GRCh38_resources/hgTables_hg38_gencode.txt"
 
 
 def read_gene_loc(hg_table_file):
@@ -31,14 +37,26 @@ def read_gene_loc(hg_table_file):
     return df_hgtable[["chr", "start", "end"]]
 
 
-def get_config_path(calico_pure_dir, sampleid):
+def get_sampleid(n_cnas, cna_size, ploidy, random):
+    """
+    Generate sampleid based on the number of CNAs - (global, shared) - CNA size, ploidy, and random seed.
+    """
+    return f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+
+
+def get_config_path(calico_pure_dir, n_cnas, cna_size, ploidy, random):
+    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+
     return f"{calico_pure_dir}/{sampleid}/configfile0"
 
 
-def get_config(configuration_file, verbose=False):
+def get_config(calico_pure_dir, n_cnas, cna_size, ploidy, random, verbose=False):
     """
     Retrieve the CalicoST config.
     """
+    configuration_file = get_config_path(
+        calico_pure_dir, n_cnas, cna_size, ploidy, random
+    )
     config = None
 
     if not Path(configuration_file).exists():
@@ -60,55 +78,84 @@ def get_config(configuration_file, verbose=False):
 
     if verbose:
         for key in config:
-            print(f"{key}: {config[key]}")
+            print(f"  {key}: {config[key]}")
 
     return config
 
 
+def get_results_dir_path(calico_pure_dir, n_cnas, cna_size, ploidy, random):
+    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+    config = get_config(calico_pure_dir, n_cnas, cna_size, ploidy, random)
+
+    # output_dir = calico_pure_dir + Path(config["output_dir"]).parent
+
+    return f"{calico_pure_dir}/{sampleid}/clone{config['n_clones']}_rectangle{random}_w{config['spatial_weight']:.1f}"
+
+
 def get_rdrbaf(
-    configuration_file,
-    random_state,
-    relative_path="../nomixing_calicost_related/",
+    calico_pure_dir,
+    n_cnas,
+    cna_size,
+    ploidy,
+    random,
     verbose=False,
 ):
     """
     Retrieve the CalicoST RDR/BAF determinations.
     """
-    config = get_config(configuration_file)
+    config = get_config(
+        calico_pure_dir, n_cnas, cna_size, ploidy, random, verbose=verbose
+    )
 
-    output_dir = relative_path + config["output_dir"].split("/")[-1]
-    outdir = f"{output_dir}/clone{config['n_clones']}_rectangle{random_state}_w{config['spatial_weight']:.1f}"
+    results_dir_path = get_results_dir_path(
+        calico_pure_dir, n_cnas, cna_size, ploidy, random
+    )
 
-    fpath = f"{outdir}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
+    fpath = f"{results_dir_path}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
 
     if Path(fpath).exists():
         res_combine = dict(
-            np.load(f"{outdir}/rdrbaf_final_nstates{config['n_states']}_smp.npz"),
+            np.load(
+                f"{results_dir_path}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
+            ),
             allow_pickle=True,
         )
 
         return res_combine
     else:
         if verbose:
-            print(f"CalicoST RDR/BAF determinations do not exist for {fpath}")
+            warnings.warning(
+                f"CalicoST RDR/BAF determinations do not exist for {fpath}"
+            )
 
         return None
 
 
 def get_best_r_hmrf(
-    configuration_file, relative_path="../nomixing_calicost_related/", verbose=False
+    calico_pure_dir,
+    n_cnas,
+    cna_size,
+    ploidy,
+    random,
+    verbose=False,
 ):
     """
     Retrieve the CalicoST random initialization with the maximum likelihood.
     """
-    config = get_config(configuration_file, verbose=verbose)
+    config = get_config(
+        calico_pure_dir, n_cnas, cna_size, ploidy, random, verbose=verbose
+    )
 
     # NB find the best HMRF initialization random seed
     df_clone = []
 
     for random_state in range(10):
         rdrbaf = get_rdrbaf(
-            configuration_file, random_state, relative_path=relative_path
+            calico_pure_dir,
+            n_cnas,
+            cna_size,
+            ploidy,
+            random,
         )
 
         if rdrbaf is not None:
@@ -183,7 +230,6 @@ def get_cna_seglevel(
 
 
 def plot_rdr_baf(
-    configuration_file,
     calico_pure_dir,
     n_cnas,
     cna_size,
@@ -199,33 +245,34 @@ def plot_rdr_baf(
     linewidth=1,
     palette="chisel",
 ):
-    r_hmrf_initialization = get_best_r_hmrf(configuration_file)
-
     sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+    configuration_file = get_config_path(
+        calico_pure_dir, n_cnas, cna_size, ploidy, random
+    )
+
+    r_hmrf_initialization = get_best_r_hmrf(
+        calico_pure_dir, n_cnas, cna_size, ploidy, random
+    )
 
     cna_path = get_cna_seglevel_path(calico_pure_dir, sampleid, r_hmrf_initialization)
     df_cnv = get_cna_seglevel(calico_pure_dir, sampleid, r_hmrf_initialization)
+    final_clone_ids = np.unique([x.split(" ")[0][5:] for x in df_cnv.columns[3:]])
 
     chisel_palette, ordered_acn = get_full_palette()
     map_cn = {x: i for i, x in enumerate(ordered_acn)}
     colors = [chisel_palette[c] for c in ordered_acn]
 
-    try:
-        config = arg_parse.read_configuration_file(configuration_file)
-    except:
-        config = arg_parse.read_joint_configuration_file(configuration_file)
-
-    final_clone_ids = np.unique([x.split(" ")[0][5:] for x in df_cnv.columns[3:]])
+    config = get_config(calico_pure_dir, n_cnas, cna_size, ploidy, random)
 
     if not "0" in final_clone_ids:
         final_clone_ids = np.array(["0"] + list(final_clone_ids))
+
     assert (clone_ids is None) or np.all(
         [(cid in final_clone_ids) for cid in clone_ids]
     )
 
     unique_chrs = np.unique(df_cnv.chr.values)
 
-    # load data
     outdir = f"{calico_pure_dir}/{sampleid}/clone{config['n_clones']}_rectangle{r_hmrf_initialization}_w{config['spatial_weight']:.1f}"
 
     dat = np.load(f"{outdir}/binned_data.npz", allow_pickle=True)
@@ -251,6 +298,7 @@ def plot_rdr_baf(
         np.where(res_combine["new_assignment"] == c)[0]
         for c, cid in enumerate(final_clone_ids)
     ]
+
     if config["tumorprop_file"] is None:
         X, base_nb_mean, total_bb_RD = merge_pseudobulk_by_index(
             single_X, single_base_nb_mean, single_total_bb_RD, clone_index
@@ -264,10 +312,10 @@ def plot_rdr_baf(
             clone_index,
             single_tumor_prop,
         )
+
     n_obs = X.shape[0]
     nonempty_clones = np.where(np.sum(total_bb_RD, axis=0) > 0)[0]
 
-    # plotting all clones
     if clone_ids is None:
         fig, axes = plt.subplots(
             2 * len(nonempty_clones),
@@ -276,9 +324,11 @@ def plot_rdr_baf(
             dpi=200,
             facecolor="white",
         )
+
         for s, c in enumerate(nonempty_clones):
             cid = final_clone_ids[c]
-            # major and minor allele copies give the hue
+
+            # NB major and minor allele copies give the hue
             major = np.maximum(
                 df_cnv[f"clone{cid} a"].values, df_cnv[f"clone{cid} b"].values
             )
@@ -286,8 +336,8 @@ def plot_rdr_baf(
                 df_cnv[f"clone{cid} a"].values, df_cnv[f"clone{cid} b"].values
             )
 
-            # plot points
             segments, labs = get_intervals(res_combine["pred_cnv"][:, c])
+
             if palette == "chisel":
                 sns.scatterplot(
                     x=np.arange(X[:, 1, c].shape[0]),
@@ -322,12 +372,15 @@ def plot_rdr_baf(
                     legend=False,
                     ax=axes[2 * s],
                 )
+
             axes[2 * s].set_ylabel(f"clone {cid}\nRDR")
             axes[2 * s].set_yticks(np.arange(1, rdr_ylim, 1))
             axes[2 * s].set_ylim([0, rdr_ylim])
             axes[2 * s].set_xlim([0, n_obs])
+
             if remove_xticks:
                 axes[2 * s].set_xticks([])
+
             if palette == "chisel":
                 sns.scatterplot(
                     x=np.arange(X[:, 1, c].shape[0]),
@@ -360,12 +413,15 @@ def plot_rdr_baf(
                     legend=False,
                     ax=axes[2 * s + 1],
                 )
+
             axes[2 * s + 1].set_ylabel(f"clone {cid}\nphased AF")
             axes[2 * s + 1].set_ylim([-0.1, 1.1])
             axes[2 * s + 1].set_yticks([0, 0.5, 1])
             axes[2 * s + 1].set_xlim([0, n_obs])
+
             if remove_xticks:
                 axes[2 * s + 1].set_xticks([])
+
             for i, seg in enumerate(segments):
                 axes[2 * s].plot(
                     seg,
@@ -408,7 +464,7 @@ def plot_rdr_baf(
             for k in range(2 * len(nonempty_clones)):
                 axes[k].axvline(x=np.sum(lengths[:(i)]), c="grey", linewidth=1)
         fig.tight_layout()
-    # plot a given clone
+
     else:
         fig, axes = plt.subplots(
             2 * len(clone_ids),
@@ -428,7 +484,6 @@ def plot_rdr_baf(
                 df_cnv[f"clone{cid} a"].values, df_cnv[f"clone{cid} b"].values
             )
 
-            # plot points
             segments, labs = get_intervals(res_combine["pred_cnv"][:, c])
             if palette == "chisel":
                 sns.scatterplot(
@@ -803,15 +858,8 @@ def get_sim_run_generator():
                     yield n_cnas, cna_size, ploidy, random
 
 
-def get_sampleid(n_cnas, cna_size, ploidy, random):
-    """
-    Generate sampleid based on the number of CNAs - (global, shared) - CNA size, ploidy, and random seed.
-    """
-    return f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
-
-
 def get_sim_runs():
-    return pd.DataFrame(
+    df = pd.DataFrame(
         [
             {
                 "n_cnas": n_cnas,
@@ -823,6 +871,11 @@ def get_sim_runs():
             for n_cnas, cna_size, ploidy, random in get_sim_run_generator()
         ]
     )
+
+    # NB 3x (global, local), 3x CNA size, 10x random.
+    assert len(df) == 90
+
+    return df
 
 
 def get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random):
@@ -896,7 +949,13 @@ def plot_true_clones(true_dir, n_cnas, cna_size, ploidy, random):
 
 def get_calico_clones_path(calico_pure_dir, n_cnas, cna_size, ploidy, random):
     sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
-    r_calico = get_best_r_hmrf(get_config_path(calico_pure_dir, sampleid))
+    r_calico = get_best_r_hmrf(
+        calico_pure_dir,
+        n_cnas,
+        cna_size,
+        ploidy,
+        random,
+    )
 
     return (
         f"{calico_pure_dir}/{sampleid}/clone3_rectangle{r_calico}_w1.0/clone_labels.tsv"
@@ -983,12 +1042,13 @@ def plot_calico_clones(
     return fig
 
 
-def get_numbat_path(numbat_dir, sampleid):
+def get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random):
+    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
     return f"{numbat_dir}/{sampleid}/outs/clone_post_2.tsv"
 
 
-def get_numbat_clones(numbat_dir, sampleid, verbose=False):
-    numbat_path = get_numbat_path(numbat_dir, sampleid)
+def get_numbat_clones(numbat_dir, n_cnas, cna_size, ploidy, random, verbose=False):
+    numbat_path = get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random)
 
     if Path(numbat_path).exists():
         if verbose:
@@ -1014,12 +1074,15 @@ def get_numbat_clones(numbat_dir, sampleid, verbose=False):
     return numbat_clones
 
 
-def get_starch_path(starch_dir, sampleid):
+def get_starch_path(starch_dir, n_cnas, cna_size, ploidy, random):
+    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
     return f"{starch_dir}/{sampleid}/labels_STITCH_output.csv"
 
 
-def get_starch_clones(starch_dir, sampleid, true_clones=None, verbose=False):
-    starch_path = get_starch_path(starch_dir, sampleid)
+def get_starch_clones(
+    starch_dir, n_cnas, cna_size, ploidy, random, true_clones=None, verbose=False
+):
+    starch_path = get_starch_path(starch_dir, n_cnas, cna_size, ploidy, random)
 
     if verbose:
         print("Reading Starch clones from", starch_path)
@@ -1042,7 +1105,6 @@ def get_starch_clones(starch_dir, sampleid, true_clones=None, verbose=False):
         }
 
         starch_clones.index = starch_clones.index.map(map_index)
-
         starch_clones.index.name = "spot"
 
     return starch_clones
@@ -1141,11 +1203,10 @@ def get_aris(true_dir, calico_pure_dir, numbat_dir, starch_dir):
         starch_path = get_starch_path(starch_dir, sampleid)
 
         starch_clones = get_starch_clones(starch_dir, sampleid, true_clones)
-
         starch_clones = starch_clones.join(true_clones)
 
         starch_summary = base_summary.copy()
-        starch_summary["method"] = "STARCH"
+        starch_summary["method"] = "Starch"
         starch_summary["ari"] = adjusted_rand_score(
             starch_clones.est_clone,
             starch_clones.true_clone,
@@ -1211,7 +1272,9 @@ def plot_aris(df_clone_ari):
         axes[i].set_title(f"{n_cnas} CNA events")
 
     h, l = axes[-1].get_legend_handles_labels()
-    axes[-1].legend(h[:3], l[:3], loc="upper left", bbox_to_anchor=(1, 1))
+    axes[-1].legend(
+        h[:3], l[:3], loc="upper left", bbox_to_anchor=(1, 1), frameon=False
+    )
 
     fig.tight_layout()
     fig.show()
@@ -1293,7 +1356,7 @@ def get_f1s(true_dir, df_hgtable, calico_pure_dir, numbat_dir, starch_dir):
         F1_dict = compute_gene_F1(true_gene_cna, starch_gene_cna)
 
         starch_summary = base_summary.copy()
-        starch_summary["method"] = "STARCH"
+        starch_summary["method"] = "Starch"
         starch_summary["event"] = [list_events]
         starch_summary["F1"] = [[F1_dict[e] for e in list_events]]
         starch_summary["true_cna"] = truth_cna_file
@@ -1341,13 +1404,15 @@ def plot_f1s(df_event_f1):
         if i + 1 < 3:
             axes[i].get_legend().remove()
 
-        axes[i].set_ylabel("F1")
+        axes[i].set_ylabel(r"$F_1$")
         axes[i].set_xlabel(None)
         axes[i].set_title(f"{n_cnas} CNA events")
         axes[i].set_xticklabels(axes[0].get_xticklabels(), rotation=90)
 
     h, l = axes[-1].get_legend_handles_labels()
-    axes[-1].legend(h[:3], l[:3], loc="upper left", bbox_to_anchor=(1, 1))
+    axes[-1].legend(
+        h[:3], l[:3], loc="upper left", bbox_to_anchor=(1, 1), frameon=False
+    )
 
     fig.tight_layout()
     fig.show()
