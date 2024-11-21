@@ -49,24 +49,27 @@ def read_gene_ranges(calico_repo_dir):
     return gene_ranges[["chr", "start", "end"]]
 
 
-def get_sampleid(n_cnas, cna_size, ploidy, random):
+def get_simid(n_cnas, cna_size, ploidy, random):
     """
-    Generate sampleid based on the number of CNAs - (global, shared) - CNA size, ploidy, and random seed.
+    Generate simid based on the number of CNAs - (global, shared) - CNA size, ploidy, and random seed.
     """
     return f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
 
 
-def get_config_path(calico_dir, n_cnas, cna_size, ploidy, random):
-    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+def get_config_path(calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed):
+    simid = get_simid(n_cnas, cna_size, ploidy, random)
+    return f"{calico_dir}/{simid}/configfile{initialization_seed}"
 
-    return f"{calico_dir}/{sampleid}/configfile0"
 
-
-def get_config(calico_dir, n_cnas, cna_size, ploidy, random, verbose=False):
+def get_config(
+    calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed, verbose=False
+):
     """
     Retrieve the CalicoST config.
     """
-    configuration_file = get_config_path(calico_dir, n_cnas, cna_size, ploidy, random)
+    configuration_file = get_config_path(
+        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+    )
     config = None
 
     if not Path(configuration_file).exists():
@@ -93,22 +96,33 @@ def get_config(calico_dir, n_cnas, cna_size, ploidy, random, verbose=False):
     return config
 
 
-def get_results_dir_path(calico_dir, n_cnas, cna_size, ploidy, random):
-    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
-    config = get_config(calico_dir, n_cnas, cna_size, ploidy, random)
-
-    # output_dir = calico_dir + Path(config["output_dir"]).parent
-
-    return f"{calico_dir}/{sampleid}/clone{config['n_clones']}_rectangle{random}_w{config['spatial_weight']:.1f}"
-
-
-def get_rdrbaf_path(calico_dir, n_cnas, cna_size, ploidy, random):
-    config = get_config(calico_dir, n_cnas, cna_size, ploidy, random)
-    results_dir_path = get_results_dir_path(
-        calico_dir, n_cnas, cna_size, ploidy, random
+def get_calico_realization_results_path(
+    calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+):
+    simid = get_simid(n_cnas, cna_size, ploidy, random)
+    config = get_config(
+        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
     )
 
-    return f"{results_dir_path}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
+    if config is not None:
+        return f"{calico_dir}/{simid}/clone{config['n_clones']}_rectangle{initialization_seed}_w{config['spatial_weight']:.1f}"
+    else:
+        return None
+
+
+def get_rdrbaf_path(calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed):
+    config = get_config(
+        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+    )
+
+    if config is not None:
+        results_dir_path = get_calico_realization_results_path(
+            calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+        )
+
+        return f"{results_dir_path}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
+    else:
+        return None
 
 
 def get_rdrbaf(
@@ -117,23 +131,35 @@ def get_rdrbaf(
     cna_size,
     ploidy,
     random,
+    initialization_seed,
     verbose=False,
 ):
     """
     Retrieve the CalicoST RDR/BAF determinations.
     """
-    config = get_config(calico_dir, n_cnas, cna_size, ploidy, random, verbose=verbose)
+    config = get_config(
+        calico_dir,
+        n_cnas,
+        cna_size,
+        ploidy,
+        random,
+        initialization_seed,
+        verbose=verbose,
+    )
+    rdrbaf_path = get_rdrbaf_path(
+        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+    )
 
-    rdrbaf_path = get_rdrbaf_path(calico_dir, n_cnas, cna_size, ploidy, random)
-
-    if Path(rdrbaf_path).exists():
+    if rdrbaf_path is not None and Path(rdrbaf_path).exists():
         return dict(
             np.load(rdrbaf_path),
             allow_pickle=True,
         )
     else:
-        warnings.warn(f"CalicoST RDR/BAF determinations do not exist for {rdrbaf_path}")
-
+        if verbose:
+            warnings.warn(
+                f"CalicoST RDR/BAF determinations do not exist for {rdrbaf_path}"
+            )
         return None
 
 
@@ -148,32 +174,43 @@ def get_r_hmrf_likelihoods(
     """
     Retrieve the CalicoST random initializations likelihoods.
     """
-    config = get_config(calico_dir, n_cnas, cna_size, ploidy, random, verbose=verbose)
+    config = get_config(
+        calico_dir,
+        n_cnas,
+        cna_size,
+        ploidy,
+        random,
+        initialization_seed=0,
+        verbose=verbose,
+    )
 
     # NB find the best HMRF initialization random seed
     df_clone = []
 
-    for random_state in range(10):
+    for initialization_seed in range(10):
         rdrbaf = get_rdrbaf(
             calico_dir,
             n_cnas,
             cna_size,
             ploidy,
             random,
+            initialization_seed,
         )
 
         if rdrbaf is not None:
             df_clone.append(
                 pd.DataFrame(
                     {
-                        "random_seed": random_state,
+                        "initialization_seed": initialization_seed,
                         "log_likelihood": rdrbaf["total_llf"],
                     },
                     index=[0],
                 )
             )
         else:
-            rdrbaf_path = get_rdrbaf_path(calico_dir, n_cnas, cna_size, ploidy, random)
+            rdrbaf_path = get_rdrbaf_path(
+                calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+            )
             warnings.warn(f"{rdrbaf_path} does not exist.")
 
     return pd.concat(df_clone, ignore_index=True) if len(df_clone) > 0 else None
@@ -201,12 +238,10 @@ def get_best_r_hmrf(
 
 
 # TODO relation to cnv_genelevel.tsv?
-def get_cna_seglevel_path(
-    calico_dir, sampleid, r_hmrf_initialization, ploidy="diploid"
-):
+def get_cna_seglevel_path(calico_dir, simid, r_hmrf_initialization, ploidy="diploid"):
     # TODO assumes clone3.
     # e.g. ../nomixing_calicost_related/numcnas1.2_cnasize1e7_ploidy2_random0/clone3_rectangle0_w1.0/cnv_diploid_seglevel.tsv
-    return f"{calico_dir}/{sampleid}/clone3_rectangle{r_hmrf_initialization}_w1.0/cnv_{ploidy}_seglevel.tsv"
+    return f"{calico_dir}/{simid}/clone3_rectangle{r_hmrf_initialization}_w1.0/cnv_{ploidy}_seglevel.tsv"
 
 
 def filter_non_netural(cna_frame):
@@ -234,13 +269,13 @@ def filter_non_netural(cna_frame):
 
 def get_cna_seglevel(
     calico_dir,
-    sampleid,
+    simid,
     r_hmrf_initialization,
     ploidy="diploid",
     non_neutral_only=False,
 ):
     cna_seglevel_path = get_cna_seglevel_path(
-        calico_dir, sampleid, r_hmrf_initialization, ploidy=ploidy
+        calico_dir, simid, r_hmrf_initialization, ploidy=ploidy
     )
 
     cna_seglevel = pd.read_csv(cna_seglevel_path, header=0, sep="\t")
@@ -268,15 +303,15 @@ def plot_rdr_baf(
     linewidth=1,
     palette="chisel",
 ):
-    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+    simid = get_simid(n_cnas, cna_size, ploidy, random)
     configuration_file = get_config_path(calico_dir, n_cnas, cna_size, ploidy, random)
 
     r_hmrf_initialization = get_best_r_hmrf(
         calico_dir, n_cnas, cna_size, ploidy, random
     )
 
-    cna_path = get_cna_seglevel_path(calico_dir, sampleid, r_hmrf_initialization)
-    df_cnv = get_cna_seglevel(calico_dir, sampleid, r_hmrf_initialization)
+    cna_path = get_cna_seglevel_path(calico_dir, simid, r_hmrf_initialization)
+    df_cnv = get_cna_seglevel(calico_dir, simid, r_hmrf_initialization)
     final_clone_ids = np.unique([x.split(" ")[0][5:] for x in df_cnv.columns[3:]])
 
     chisel_palette, ordered_acn = get_full_palette()
@@ -294,7 +329,7 @@ def plot_rdr_baf(
 
     unique_chrs = np.unique(df_cnv.chr.values)
 
-    outdir = f"{calico_dir}/{sampleid}/clone{config['n_clones']}_rectangle{r_hmrf_initialization}_w{config['spatial_weight']:.1f}"
+    outdir = f"{calico_dir}/{simid}/clone{config['n_clones']}_rectangle{r_hmrf_initialization}_w{config['spatial_weight']:.1f}"
 
     dat = np.load(f"{outdir}/binned_data.npz", allow_pickle=True)
     lengths = dat["lengths"]
@@ -802,8 +837,8 @@ def compute_gene_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
     """
     F1_dict = {}
 
-    for event in ["DEL", "AMP", "CNLOH", "overall"]:
-        if event != "overall":
+    for event in ["DEL", "AMP", "CNLOH", "ALL"]:
+        if event != "ALL":
             # NB unique set of gene names for a given CNA type, e.g. deletion.
             # TODO BUG type definition is not relative to truth.
 
@@ -881,7 +916,7 @@ def get_sim_run_generator():
                     yield n_cnas, cna_size, ploidy, random
 
 
-def get_sim_runs():
+def get_sim_runs(calico_dir=None):
     df = pd.DataFrame(
         [
             {
@@ -889,7 +924,7 @@ def get_sim_runs():
                 "cna_size": cna_size,
                 "ploidy": ploidy,
                 "random": random,
-                "sampleid": get_sampleid(n_cnas, cna_size, ploidy, random),
+                "simid": get_simid(n_cnas, cna_size, ploidy, random),
             }
             for n_cnas, cna_size, ploidy, random in get_sim_run_generator()
         ]
@@ -898,12 +933,21 @@ def get_sim_runs():
     # NB 3x (global, local), 3x CNA size, 10x random.
     assert len(df) == 90
 
+    if calico_dir is not None:
+        likelihoods = [
+            get_r_hmrf_likelihoods(calico_dir, n_cnas, cna_size, ploidy, random)
+            for n_cnas, cna_size, ploidy, random in get_sim_run_generator()
+        ]
+        df["nvalid"] = list(
+            map(lambda xx: len(xx) if xx is not None else 0, likelihoods)
+        )
+
     return df
 
 
 def get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random):
-    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
-    return f"{true_dir}/{sampleid}/truth_clone_labels.tsv"
+    simid = get_simid(n_cnas, cna_size, ploidy, random)
+    return f"{true_dir}/{simid}/truth_clone_labels.tsv"
 
 
 def get_true_clones(true_dir, n_cnas, cna_size, ploidy, random, verbose=False):
@@ -988,7 +1032,7 @@ def plot_clones(clones, n_cnas, cna_size, ploidy, random, truth=False):
 
 
 def get_calico_best_clones_path(calico_dir, n_cnas, cna_size, ploidy, random):
-    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+    simid = get_simid(n_cnas, cna_size, ploidy, random)
     r_calico = get_best_r_hmrf(
         calico_dir,
         n_cnas,
@@ -998,7 +1042,7 @@ def get_calico_best_clones_path(calico_dir, n_cnas, cna_size, ploidy, random):
     )
 
     # TODO results dir path.
-    return f"{calico_dir}/{sampleid}/clone3_rectangle{r_calico}_w1.0/clone_labels.tsv"
+    return f"{calico_dir}/{simid}/clone3_rectangle{r_calico}_w1.0/clone_labels.tsv"
 
 
 def get_calico_best_clones(
@@ -1031,8 +1075,8 @@ def get_calico_best_clones(
 
 
 def get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random):
-    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
-    return f"{numbat_dir}/{sampleid}/outs/clone_post_2.tsv"
+    simid = get_simid(n_cnas, cna_size, ploidy, random)
+    return f"{numbat_dir}/{simid}/outs/clone_post_2.tsv"
 
 
 def get_numbat_clones(
@@ -1070,8 +1114,8 @@ def get_numbat_clones(
 
 
 def get_starch_path(starch_dir, n_cnas, cna_size, ploidy, random):
-    sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
-    return f"{starch_dir}/{sampleid}/labels_STITCH_output.csv"
+    simid = get_simid(n_cnas, cna_size, ploidy, random)
+    return f"{starch_dir}/{simid}/labels_STITCH_output.csv"
 
 
 def get_starch_clones(
@@ -1107,7 +1151,7 @@ def get_starch_clones(
     return starch_clones
 
 
-def get_base_sim_summary(n_cnas, cna_size, ploidy, random, sampleid, true_path):
+def get_base_sim_summary(n_cnas, cna_size, ploidy, random, simid, true_path):
     return pd.DataFrame(
         {
             "cnas": f"{n_cnas[0], n_cnas[1]}",
@@ -1115,7 +1159,7 @@ def get_base_sim_summary(n_cnas, cna_size, ploidy, random, sampleid, true_path):
             "cna_size": __cnasize_mapper[cna_size],
             "ploidy": int(ploidy),
             "random": random,
-            "sample_id": sampleid,
+            "sample_id": simid,
             "true_clones_path": true_path,
         },
         index=[0],
@@ -1139,10 +1183,10 @@ def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
         true_path = get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random)
         true_clones = get_true_clones(true_dir, n_cnas, cna_size, ploidy, random)
 
-        sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+        simid = get_simid(n_cnas, cna_size, ploidy, random)
 
         base_summary = get_base_sim_summary(
-            n_cnas, cna_size, ploidy, random, sampleid, true_path
+            n_cnas, cna_size, ploidy, random, simid, true_path
         )
 
         # -- CalicoST --
@@ -1238,7 +1282,7 @@ def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
     return df_clone_ari
 
 
-def plot_aris(df_clone_ari):
+def plot_clone_aris(df_clone_ari):
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True, dpi=300)
     color_methods = ["#4963C1", "#97b085", "#dad67d"]
 
@@ -1288,35 +1332,35 @@ def plot_aris(df_clone_ari):
     fig.show()
 
 
-def get_truth_cna_file(true_dir, sampleid):
-    return f"{true_dir}/{sampleid}/truth_cna.tsv"
+def get_truth_cna_file(true_dir, simid):
+    return f"{true_dir}/{simid}/truth_cna.tsv"
 
 
-def get_numbat_cna_file(numbat_dir, sampleid):
-    return f"{numbat_dir}/{sampleid}/outs/bulk_clones_final.tsv.gz"
+def get_numbat_cna_file(numbat_dir, simid):
+    return f"{numbat_dir}/{simid}/outs/bulk_clones_final.tsv.gz"
 
 
-def get_starch_cna_file(starch_dir, sampleid):
-    return f"{starch_dir}/{sampleid}/states_STITCH_output.csv"
+def get_starch_cna_file(starch_dir, simid):
+    return f"{starch_dir}/{simid}/states_STITCH_output.csv"
 
 
-def get_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
+def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
     gene_ranges = read_gene_ranges(calico_repo_dir)
 
     # EG 6 shared CNAs and 3 clone specific.
     sim_params = get_sim_params()
-    list_events = ["DEL", "AMP", "CNLOH", "overall"]
+    list_events = ["DEL", "AMP", "CNLOH", "ALL"]
 
     df_event_f1 = []
 
     for n_cnas, cna_size, ploidy, random in get_sim_run_generator():
-        sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
+        simid = get_simid(n_cnas, cna_size, ploidy, random)
 
-        truth_cna_file = get_truth_cna_file(true_dir, sampleid)
+        truth_cna_file = get_truth_cna_file(true_dir, simid)
         true_gene_cna = read_true_gene_cna(gene_ranges, truth_cna_file)
 
         base_summary = get_base_sim_summary(
-            n_cnas, cna_size, ploidy, random, sampleid, truth_cna_file
+            n_cnas, cna_size, ploidy, random, simid, truth_cna_file
         )
 
         # CalicoST
@@ -1344,7 +1388,7 @@ def get_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
             )
 
         # Numbat
-        numbat_cna_file = get_numbat_cna_file(numbat_dir, sampleid)
+        numbat_cna_file = get_numbat_cna_file(numbat_dir, simid)
 
         numbat_summary = base_summary.copy()
         numbat_summary["method"] = "Numbat"
@@ -1367,7 +1411,7 @@ def get_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
         )
 
         # STARCH
-        starch_cna_file = get_starch_cna_file(starch_dir, sampleid)
+        starch_cna_file = get_starch_cna_file(starch_dir, simid)
         starch_gene_cna = read_starch_gene_cna(starch_cna_file)
 
         F1_dict = compute_gene_F1(true_gene_cna, starch_gene_cna)
@@ -1386,50 +1430,82 @@ def get_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
     return pd.concat(df_event_f1, ignore_index=True)
 
 
-def plot_f1s(df_event_f1):
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4), dpi=300)
+def plot_cna_f1s(df_event_f1):
+    sim_params = get_sim_params()
 
-    color_methods = ["#4963C1", "#97b085", "#dad67d"]
+    figsize = (
+        12,
+        4 * (1 + len(sim_params["all_cna_sizes"])),
+    )
 
-    for i, n_cnas in enumerate([3, 6, 9]):
-        tmpdf = df_event_f1[df_event_f1.n_cnas == n_cnas]
+    fig, axes = plt.subplots(4, 3, figsize=figsize, dpi=300)
+    colors = ["#4963C1", "#97b085", "#dad67d"]
+    palette = sns.color_palette(colors)
 
-        sns.boxplot(
-            data=tmpdf,
-            x="event",
-            y="F1",
-            hue="method",
-            palette=sns.color_palette(color_methods),
-            boxprops=dict(alpha=0.7),
-            linewidth=1,
-            showfliers=False,
-            ax=axes[i],
-        )
+    for i, cnasize in enumerate(sim_params["all_cna_sizes"][::-1]):
+        for j, n_cnas in enumerate(sim_params["all_n_cnas"]):
+            num_n_cnas = sum(n_cnas)
 
-        sns.stripplot(
-            data=tmpdf,
-            x="event",
-            y="F1",
-            hue="method",
-            palette=sns.color_palette(color_methods),
-            dodge=10,
-            edgecolor="black",
-            linewidth=0.5,
-            ax=axes[i],
-        )
+            isin = df_event_f1.method == "CalicoST"
+            isin &= df_event_f1.n_cnas == num_n_cnas
+            isin &= df_event_f1.cna_size == __cnasize_mapper[cnasize]
 
-        if i + 1 < 3:
-            axes[i].get_legend().remove()
+            tmpdf = df_event_f1[isin]
 
-        axes[i].set_ylabel(r"$F_1$")
-        axes[i].set_xlabel(None)
-        axes[i].set_title(f"{n_cnas} CNA events")
-        axes[i].set_xticklabels(axes[0].get_xticklabels(), rotation=90)
+            if len(tmpdf) == 0:
+                continue
+            """
+            sns.scatterplot(
+                data=tmpdf,
+                x="event",
+                y="F1",
+                hue="method",
+                palette=palette,
+                s=10,
+                edgecolor="black",
+                linewidth=0.5,
+                ax=axes[i,j],
+            )
+            """
+            sns.boxplot(
+                data=tmpdf,
+                x="event",
+                y="F1",
+                hue="method",
+                palette=palette,
+                boxprops=dict(alpha=0.7),
+                linewidth=1,
+                showfliers=False,
+                ax=axes[i, j],
+            )
 
-    h, l = axes[-1].get_legend_handles_labels()
-    axes[-1].legend(
+            sns.stripplot(
+                data=tmpdf,
+                x="event",
+                y="F1",
+                hue="method",
+                palette=palette,
+                dodge=10,
+                edgecolor="black",
+                linewidth=0.5,
+                ax=axes[i, j],
+            )
+
+            axes[i, j].get_legend().remove()
+            axes[i, j].set_xlabel(None)
+            axes[i, j].set_ylabel(None)
+            axes[i, j].set_xticklabels(axes[0, 0].get_xticklabels(), rotation=90)
+            axes[i, j].set_ylim(-0.05, 1.05)
+
+        axes[i, 0].set_ylabel(f"{__cnasize_mapper[cnasize]}" + r" $F_1$")
+
+    h, l = axes[-1, -1].get_legend_handles_labels()
+    axes[-1, -1].legend(
         h[:3], l[:3], loc="upper left", bbox_to_anchor=(1, 1), frameon=False
     )
+
+    for j, n_cnas in enumerate(sim_params["all_n_cnas"]):
+        axes[0, j].set_title(f"{n_cnas} CNAs")
 
     fig.tight_layout()
     fig.show()
