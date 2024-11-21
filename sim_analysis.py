@@ -137,7 +137,7 @@ def get_rdrbaf(
         return None
 
 
-def get_best_r_hmrf(
+def get_r_hmrf_likelihoods(
     calico_dir,
     n_cnas,
     cna_size,
@@ -146,7 +146,7 @@ def get_best_r_hmrf(
     verbose=False,
 ):
     """
-    Retrieve the CalicoST random initialization with the maximum likelihood.
+    Retrieve the CalicoST random initializations likelihoods.
     """
     config = get_config(calico_dir, n_cnas, cna_size, ploidy, random, verbose=verbose)
 
@@ -166,28 +166,38 @@ def get_best_r_hmrf(
             df_clone.append(
                 pd.DataFrame(
                     {
-                        "random seed": random_state,
-                        "log-likelihood": rdrbaf["total_llf"],
+                        "random_seed": random_state,
+                        "log_likelihood": rdrbaf["total_llf"],
                     },
                     index=[0],
                 )
             )
         else:
             rdrbaf_path = get_rdrbaf_path(calico_dir, n_cnas, cna_size, ploidy, random)
-
             warnings.warn(f"{rdrbaf_path} does not exist.")
 
-    df_clone = pd.concat(df_clone, ignore_index=True) if len(df_clone) > 0 else None
+    return pd.concat(df_clone, ignore_index=True) if len(df_clone) > 0 else None
 
-    if df_clone is None:
-        return -1
 
-    else:
-        idx = np.argmax(df_clone["log-likelihood"])
+def get_best_r_hmrf(
+    calico_dir,
+    n_cnas,
+    cna_size,
+    ploidy,
+    random,
+    verbose=False,
+):
+    """
+    Retrieve the CalicoST random initialization with the maximum likelihood.
+    """
+    df_clone = get_r_hmrf_likelihoods(calico_dir, n_cnas, cna_size, ploidy, random)
 
-        r_hmrf_initialization = df_clone["random seed"].iloc[idx]
-
-        return int(r_hmrf_initialization)
+    # NB returns first of degenerate max., i.e. 0 if all the likelihoods are the same.
+    return (
+        int(df_clone["random_seed"].iloc[np.argmax(df_clone["log_likelihood"])])
+        if df_clone is not None
+        else -1
+    )
 
 
 # TODO relation to cnv_genelevel.tsv?
