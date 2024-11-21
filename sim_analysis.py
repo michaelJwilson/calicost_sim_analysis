@@ -18,26 +18,35 @@ from calicost.utils_phase_switch import get_intervals
 __cnasize_mapper = {"1e7": "10Mb", "3e7": "30Mb", "5e7": "50Mb"}
 
 
-def get_gene_loc_path(calico_repo_dir):
+def path_not_exists(path):
+    if not Path(path).exists():
+        warnings.warn(f"\n{path} does not exist.")
+        return True
+
+    return False
+
+
+def get_gene_ranges_path(calico_repo_dir):
     return f"{calico_repo_dir}/GRCh38_resources/hgTables_hg38_gencode.txt"
 
 
-def read_gene_loc(hg_table_file):
+def read_gene_ranges(calico_repo_dir):
     """
     Read in (chronological order, start, end) table for (coding) gene definition.
     """
-    df_hgtable = pd.read_csv(hg_table_file, sep="\t", header=0, index_col=0)
+    gene_ranges_path = get_gene_ranges_path(calico_repo_dir)
 
-    df_hgtable = df_hgtable[df_hgtable.chrom.isin([f"chr{i}" for i in range(1, 23)])]
+    gene_ranges = pd.read_csv(gene_ranges_path, sep="\t", header=0, index_col=0)
+    gene_ranges = gene_ranges[gene_ranges.chrom.isin([f"chr{i}" for i in range(1, 23)])]
 
     # NB add chr column as integer without "chr" prefix
-    df_hgtable["chr"] = [int(x[3:]) for x in df_hgtable.chrom]
-    df_hgtable = df_hgtable.rename(
+    gene_ranges["chr"] = [int(x[3:]) for x in gene_ranges.chrom]
+    gene_ranges = gene_ranges.rename(
         columns={"cdsStart": "start", "cdsEnd": "end", "name2": "gene"}
     )
-    df_hgtable.set_index("gene", inplace=True)
+    gene_ranges.set_index("gene", inplace=True)
 
-    return df_hgtable[["chr", "start", "end"]]
+    return gene_ranges[["chr", "start", "end"]]
 
 
 def get_sampleid(n_cnas, cna_size, ploidy, random):
@@ -617,11 +626,11 @@ def plot_rdr_baf(
     return fig
 
 
-def read_true_gene_cna(df_hgtable, truth_cna_file, non_neutral_only=False):
+def read_true_gene_cna(gene_ranges, truth_cna_file, non_neutral_only=False):
     """
     Read true copy number aberrations
     """
-    true_gene_cna = df_hgtable.copy()
+    true_gene_cna = gene_ranges.copy()
     df_cna = pd.read_csv(truth_cna_file, header=0, index_col=0, sep="\t")
 
     unique_clones = df_cna.index.unique()
@@ -674,24 +683,26 @@ def read_true_gene_cna(df_hgtable, truth_cna_file, non_neutral_only=False):
     return true_gene_cna
 
 
-def get_calico_cna_file(configuration_file):
-    r_calico = get_best_r_hmrf(configuration_file)
+def get_calico_cna_file(calico_dir, n_cnas, cna_size, ploidy, random):
+    config_path = get_config_path(calico_dir, n_cnas, cna_size, ploidy, random)
+    r_calico = get_best_r_hmrf(calico_dir, n_cnas, cna_size, ploidy, random)
 
-    # NB parent directory of configuration file.
-    # tmpdir = "/".join(configuration_file.split("/")[:-1])
-    tmpdir = Path(configuration_file).parent
-
-    return f"{tmpdir}/clone3_rectangle{r_calico}_w1.0/cnv_genelevel.tsv"
+    return (
+        f"{Path(config_path).parent}/clone3_rectangle{r_calico}_w1.0/cnv_genelevel.tsv"
+    )
 
 
-def read_calico_gene_cna(configuration_file):
+def read_calico_gene_cna(calico_dir, n_cnas, cna_size, ploidy, random):
     """
     Read CalicoST estimated copy number aberrations.
     """
-    calico_cna_file = get_calico_cna_file(configuration_file)
+    fpath = get_calico_cna_file(calico_dir, n_cnas, cna_size, ploidy, random)
+
+    if path_not_exists(fpath):
+        return None
 
     calico_gene_cna = pd.read_csv(
-        calico_cna_file,
+        fpath,
         header=0,
         index_col=0,
         sep="\t",
@@ -978,14 +989,6 @@ def get_calico_best_clones_path(calico_dir, n_cnas, cna_size, ploidy, random):
 
     # TODO results dir path.
     return f"{calico_dir}/{sampleid}/clone3_rectangle{r_calico}_w1.0/clone_labels.tsv"
-
-
-def path_not_exists(path):
-    if not Path(path).exists():
-        warnings.warn(f"\n{path} does not exist.")
-        return True
-
-    return False
 
 
 def get_calico_best_clones(
@@ -1287,7 +1290,9 @@ def get_starch_cna_file(starch_dir, sampleid):
     return f"{starch_dir}/{sampleid}/states_STITCH_output.csv"
 
 
-def get_f1s(true_dir, df_hgtable, calico_dir, numbat_dir, starch_dir):
+def get_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
+    gene_ranges = read_gene_ranges(calico_repo_dir)
+
     # EG 6 shared CNAs and 3 clone specific.
     sim_params = get_sim_params()
     list_events = ["DEL", "AMP", "CNLOH", "overall"]
@@ -1298,28 +1303,35 @@ def get_f1s(true_dir, df_hgtable, calico_dir, numbat_dir, starch_dir):
         sampleid = get_sampleid(n_cnas, cna_size, ploidy, random)
 
         truth_cna_file = get_truth_cna_file(true_dir, sampleid)
-        true_gene_cna = read_true_gene_cna(df_hgtable, truth_cna_file)
+        true_gene_cna = read_true_gene_cna(gene_ranges, truth_cna_file)
 
         base_summary = get_base_sim_summary(
             n_cnas, cna_size, ploidy, random, sampleid, truth_cna_file
         )
 
         # CalicoST
-        configuration_file = get_config_path(calico_dir, sampleid)
-        calico_gene_cna = read_calico_gene_cna(configuration_file)
-
-        F1_dict = compute_gene_F1(true_gene_cna, calico_gene_cna)
-
-        calicost_summary = base_summary.copy()
-        calicost_summary["method"] = "CalicoST"
-        calicost_summary["event"] = [list_events]
-        calicost_summary["F1"] = [[F1_dict[e] for e in list_events]]
-        calicost_summary["true_cna"] = truth_cna_file
-        calicost_summary["est_cna_file"] = get_calico_cna_file(configuration_file)
-
-        df_event_f1.append(
-            calicost_summary.explode(["event", "F1"]).reset_index(drop=True)
+        configuration_file = get_config_path(
+            calico_dir, n_cnas, cna_size, ploidy, random
         )
+        calico_gene_cna = read_calico_gene_cna(
+            calico_dir, n_cnas, cna_size, ploidy, random
+        )
+
+        if calico_gene_cna is not None:
+            F1_dict = compute_gene_F1(true_gene_cna, calico_gene_cna)
+
+            calicost_summary = base_summary.copy()
+            calicost_summary["method"] = "CalicoST"
+            calicost_summary["event"] = [list_events]
+            calicost_summary["F1"] = [[F1_dict[e] for e in list_events]]
+            calicost_summary["true_cna"] = truth_cna_file
+            calicost_summary["est_cna_file"] = get_calico_cna_file(
+                calico_dir, n_cnas, cna_size, ploidy, random
+            )
+
+            df_event_f1.append(
+                calicost_summary.explode(["event", "F1"]).reset_index(drop=True)
+            )
 
         # Numbat
         numbat_cna_file = get_numbat_cna_file(numbat_dir, sampleid)
@@ -1338,7 +1350,7 @@ def get_f1s(true_dir, df_hgtable, calico_dir, numbat_dir, starch_dir):
             numbat_summary["est_cna_file"] = numbat_cna_file
         else:
             numbat_summary["F1"] = [[0.0 for e in list_events]]
-            numbat_summary["est_cna_file"] = "-"
+            numbat_summary["est_cna_file"] = numbat_cna_file
 
         df_event_f1.append(
             numbat_summary.explode(["event", "F1"]).reset_index(drop=True)
