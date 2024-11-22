@@ -680,9 +680,8 @@ def get_truth_cna_file(true_dir, n_cnas, cna_size, ploidy, random):
 
 
 def get_cna_type_v0(A_copy, B_copy):
-    assert (A_copy != 1) and (
-        B_copy != 1
-    ), f"Original classification not defined for neutral CNA type (1,1)."
+    if (A_copy == 1) and (B_copy == 1):
+        raise RuntimeError(f"v0 classification not defined for neutral CNA type (1,1).")
 
     if A_copy + B_copy > 2:
         return "AMP"
@@ -694,16 +693,40 @@ def get_cna_type_v0(A_copy, B_copy):
         return "CNLOH"
 
 
-def get_cna_type(A_copy, B_copy, version="v0"):
+def get_cna_type_v1(A_copy, B_copy):
+    if (A_copy == 1) and (B_copy == 1):
+        return "NEU"
+
+    result = []
+
+    if (A_copy > 1) or (B_copy > 1):
+        result.append("AMP")
+    if (A_copy < 1) or (B_copy < 1):
+        result.append("DEL")
+    if (A_copy == 0) or (B_copy == 0):
+        result.append("CNLOH")
+
+    return ",".join(result)
+
+
+def get_cna_type(A_copy, B_copy, version="v1"):
     if version == "v0":
         return get_cna_type_v0(A_copy, B_copy)
     elif version == "v1":
-        raise NotImplementedError("CNA type classification version v1 not implemented.")
+        return get_cna_type_v1(A_copy, B_copy)
     else:
         raise ValueError(f"CNA type classification version {version} not recognized.")
 
 
-def read_true_cna(true_dir, n_cnas, cna_size, ploidy, random, non_neutral_only=False):
+def read_true_cna(
+    true_dir,
+    n_cnas,
+    cna_size,
+    ploidy,
+    random,
+    non_neutral_only=False,
+    ctype_version="v1",
+):
     """
     Read true copy number aberrations.
     """
@@ -714,20 +737,34 @@ def read_true_cna(true_dir, n_cnas, cna_size, ploidy, random, non_neutral_only=F
         lambda row: f"{row['A_copy']}|{row['B_copy']}", axis=1
     )
     df_cna["cna_ctype"] = df_cna.apply(
-        lambda row: get_cna_type(row["A_copy"], row["B_copy"]), axis=1
+        lambda row: get_cna_type(row["A_copy"], row["B_copy"], version=ctype_version),
+        axis=1,
     )
 
     return df_cna
 
 
 def read_true_gene_cna(
-    true_dir, n_cnas, cna_size, ploidy, random, gene_ranges, non_neutral_only=False
+    true_dir,
+    n_cnas,
+    cna_size,
+    ploidy,
+    random,
+    gene_ranges,
+    non_neutral_only=False,
+    ctype_version="v1",
 ):
     """
     Read true copy number aberrations defined on a set of gene ranges.
     """
     df_cna = read_true_cna(
-        true_dir, n_cnas, cna_size, ploidy, random, non_neutral_only=False
+        true_dir,
+        n_cnas,
+        cna_size,
+        ploidy,
+        random,
+        non_neutral_only=False,
+        ctype_version=ctype_version,
     )
 
     true_gene_cna = gene_ranges.copy()
@@ -743,7 +780,7 @@ def read_true_gene_cna(
         gene_status_str = np.array(["1|1"] * true_gene_cna.shape[0])
 
         # NB NEUTRAL == (1,1).
-        gene_status_type = np.array(["NEU"] * true_gene_cna.shape[0], dtype="<U5")
+        gene_status_type = np.array(["NEU"] * true_gene_cna.shape[0], dtype="<U25")
 
         for i in range(clonal_cna.shape[0]):
             # NB for each CNA segment,
