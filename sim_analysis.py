@@ -688,9 +688,10 @@ def get_cna_type_v0(A_copy, B_copy):
     elif A_copy + B_copy < 2:
         return "DEL"
     else:
-        # TODO BUG (2,0) == CNLOH.
-        # TODO BUG (1,1) == NEU!!!
-        return "CNLOH"
+        if A_copy == B_copy:
+            return "NEU"
+        else:
+            return "CNLOH"
 
 
 def get_cna_type_v1(A_copy, B_copy):
@@ -825,10 +826,17 @@ def get_calico_cna_file(
 
 
 def read_calico_gene_cna(
-    calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+    calico_dir,
+    n_cnas,
+    cna_size,
+    ploidy,
+    random,
+    initialization_seed,
+    non_neutral_only=False,
+    ctype_version="v1",
 ):
     """
-    Read CalicoST estimated copy number aberrations.
+    Read CalicoST estimated copy number aberrations defined on a set of gene ranges.
     """
     fpath = get_calico_cna_file(
         calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
@@ -850,9 +858,12 @@ def read_calico_gene_cna(
         .str[0]
     )
 
-    for c in calico_clones:
-        cna_type_assay = np.array(["NEU"] * calico_gene_cna.shape[0], dtype="<U5")
+    isin = np.array([False] * len(calico_gene_cna))
 
+    for c in calico_clones:
+        cna_type_assay = np.array(["NEU"] * calico_gene_cna.shape[0], dtype="<U25")
+
+        """
         cna_type_assay[
             calico_gene_cna[f"{c} A"].values + calico_gene_cna[f"{c} B"].values < 2
         ] = "DEL"
@@ -866,8 +877,22 @@ def read_calico_gene_cna(
         ) & (calico_gene_cna[f"{c} A"].values != calico_gene_cna[f"{c} B"].values)
 
         cna_type_assay[is_cnloh] = "CNLOH"
+        """
+
+        for i in range(calico_gene_cna.shape[0]):
+            cna_type_assay[i] = get_cna_type(
+                calico_gene_cna[f"{c} A"].values[i],
+                calico_gene_cna[f"{c} B"].values[i],
+                version=ctype_version,
+            )
+
+            if cna_type_assay[i] != "NEU":
+                isin[i] = True
 
         calico_gene_cna[f"{c}_type"] = cna_type_assay
+
+    if non_neutral_only:
+        calico_gene_cna = calico_gene_cna[isin]
 
     return calico_gene_cna
 
