@@ -679,22 +679,64 @@ def get_truth_cna_file(true_dir, n_cnas, cna_size, ploidy, random):
     return f"{true_dir}/{simid}/truth_cna.tsv"
 
 
+def get_cna_type_v0(A_copy, B_copy):
+    assert (A_copy != 1) and (
+        B_copy != 1
+    ), f"Original classification not defined for neutral CNA type (1,1)."
+
+    if A_copy + B_copy > 2:
+        return "AMP"
+    elif A_copy + B_copy < 2:
+        return "DEL"
+    else:
+        # TODO BUG (2,0) == CNLOH.
+        # TODO BUG (1,1) == NEU!!!
+        return "CNLOH"
+
+
+def get_cna_type(A_copy, B_copy, version="v0"):
+    if version == "v0":
+        return get_cna_type_v0(A_copy, B_copy)
+    elif version == "v1":
+        raise NotImplementedError("CNA type classification version v1 not implemented.")
+    else:
+        raise ValueError(f"CNA type classification version {version} not recognized.")
+
+
+def read_true_cna(true_dir, n_cnas, cna_size, ploidy, random, non_neutral_only=False):
+    """
+    Read true copy number aberrations.
+    """
+    truth_cna_file = get_truth_cna_file(true_dir, n_cnas, cna_size, ploidy, random)
+    df_cna = pd.read_csv(truth_cna_file, header=0, index_col=0, sep="\t")
+
+    df_cna["cna_gtype"] = df_cna.apply(
+        lambda row: f"{row['A_copy']}|{row['B_copy']}", axis=1
+    )
+    df_cna["cna_ctype"] = df_cna.apply(
+        lambda row: get_cna_type(row["A_copy"], row["B_copy"]), axis=1
+    )
+
+    return df_cna
+
+
 def read_true_gene_cna(
     true_dir, n_cnas, cna_size, ploidy, random, gene_ranges, non_neutral_only=False
 ):
     """
-    Read true copy number aberrations
+    Read true copy number aberrations defined on a set of gene ranges.
     """
-    truth_cna_file = get_truth_cna_file(true_dir, n_cnas, cna_size, ploidy, random)
+    df_cna = read_true_cna(
+        true_dir, n_cnas, cna_size, ploidy, random, non_neutral_only=False
+    )
 
     true_gene_cna = gene_ranges.copy()
-    df_cna = pd.read_csv(truth_cna_file, header=0, index_col=0, sep="\t")
 
-    unique_clones = df_cna.index.unique()
-
-    for clonename in unique_clones:
+    for clonename in df_cna.index.unique():
+        # NB clonal_cna never includes neutral (1,1), only aberrations.
         clonal_cna = df_cna[df_cna.index == clonename]
 
+        # NB build default (A, B) copies and classifcation for all genes.
         gene_A = np.array([1] * true_gene_cna.shape[0])
         gene_B = np.array([1] * true_gene_cna.shape[0])
 
@@ -704,27 +746,19 @@ def read_true_gene_cna(
         gene_status_type = np.array(["NEU"] * true_gene_cna.shape[0], dtype="<U5")
 
         for i in range(clonal_cna.shape[0]):
-            cna_str = f"{clonal_cna.A_copy.values[i]}|{clonal_cna.B_copy.values[i]}"
-
-            if clonal_cna.A_copy.values[i] + clonal_cna.B_copy.values[i] > 2:
-                cna_type = "AMP"
-            elif clonal_cna.A_copy.values[i] + clonal_cna.B_copy.values[i] < 2:
-                cna_type = "DEL"
-            else:
-                # TODO BUG (2,0) == CNLOH.
-                cna_type = "CNLOH"
-
+            # NB for each CNA segment,
+            # TODO NB just-touch criteria -> significant overlap.
+            # TODO NB if a gene crosses two segments, will be updated twice.
             is_affected = true_gene_cna.chr == clonal_cna.chr.values[i]
 
-            # TODO NB just-touch criteria -> significant overlap.
             is_affected &= true_gene_cna.end >= clonal_cna.start.values[i]
             is_affected &= true_gene_cna.start <= clonal_cna.end.values[i]
 
             gene_A[is_affected] = clonal_cna.A_copy.values[i]
             gene_B[is_affected] = clonal_cna.B_copy.values[i]
 
-            gene_status_str[is_affected] = cna_str
-            gene_status_type[is_affected] = cna_type
+            gene_status_str[is_affected] = clonal_cna.cna_gtype.values[i]
+            gene_status_type[is_affected] = clonal_cna.cna_ctype.values[i]
 
         clonename = clonename.replace("_", "")
 
@@ -844,6 +878,18 @@ def read_starch_gene_cna(states_file):
     return starch_gene_cna
 
 
+def get_cna_types():
+    return ("DEL", "AMP", "CNLOH", "ALL")
+
+
+def compute_F1(precision, recall, null=0.0):
+    return (
+        2.0 * precision * recall / (precision + recall)
+        if precision + recall > 0.0
+        else null
+    )
+
+
 # TODO BUG null_value=0.0 -> null_value=np.nan
 def compute_cna_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
     """
@@ -855,9 +901,9 @@ def compute_cna_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
         Each row is a gene with row index as gene name.
         Contains columns <clone>_type to indicate whether each gene in NEU, DEL, AMP, CNLOH in each clone.
     """
-    F1_dict = {}
+    F1_dict, precision_dict, recall_dict = {}, {}, {}
 
-    for event in ["DEL", "AMP", "CNLOH", "ALL"]:
+    for event in get_cna_types():
         if event != "ALL":
             # NB unique set of gene names for a given CNA type, e.g. deletion.
             # TODO BUG type definition is not relative to truth.
@@ -891,30 +937,29 @@ def compute_cna_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
                 ]
             )
 
-        # NB some genes don't have enough coverage and are filtered out in preprocessing, so we remove them from true_event_genes.
+        # NB some genes don't have enough coverage and are filtered out in preprocessing,
+        #    so we remove them from true_event_genes.
         true_event_genes = true_event_genes & set(pred_gene_cna.index)
 
         if len(true_event_genes) == 0:
+            precision_dict[event] = np.nan
+            recall_dict[event] = np.nan
             F1_dict[event] = np.nan
         else:
-            precision = (
+            precision_dict[event] = (
                 len(pred_event_genes & true_event_genes) / len(pred_event_genes)
                 if len(pred_event_genes) > 0
                 else null_value
             )
-            recall = (
+            recall_dict[event] = (
                 len(pred_event_genes & true_event_genes) / len(true_event_genes)
                 if len(true_event_genes) > 0
                 else null_value
             )
 
-            F1_dict[event] = (
-                2.0 * precision * recall / (precision + recall)
-                if precision + recall > 0
-                else null_value
-            )
+            F1_dict[event] = compute_F1(precision_dict[event], recall_dict[event])
 
-    return F1_dict
+    return F1_dict, precision_dict, recall_dict
 
 
 def get_sim_params():
@@ -1364,7 +1409,7 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
 
     # EG 6 shared CNAs and 3 clone specific.
     sim_params = get_sim_params()
-    list_events = ["DEL", "AMP", "CNLOH", "ALL"]
+    list_events = get_cna_types()
 
     df_event_f1 = []
 
@@ -1393,11 +1438,13 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
         )
 
         if calico_gene_cna is not None:
-            F1s = compute_cna_F1(true_gene_cna, calico_gene_cna)
+            F1s, precisions, recalls = compute_cna_F1(true_gene_cna, calico_gene_cna)
 
             calicost_summary = base_summary.copy()
             calicost_summary["method"] = "CalicoST"
             calicost_summary["event"] = [list_events]
+            calicost_summary["precision"] = [[precisions[e] for e in list_events]]
+            calicost_summary["recall"] = [[recalls[e] for e in list_events]]
             calicost_summary["F1"] = [[F1s[e] for e in list_events]]
             calicost_summary["true_cna"] = truth_cna_file
             calicost_summary["est_cna_file"] = get_calico_cna_file(
@@ -1405,7 +1452,9 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
             )
 
             df_event_f1.append(
-                calicost_summary.explode(["event", "F1"]).reset_index(drop=True)
+                calicost_summary.explode(
+                    ["event", "F1", "precision", "recall"]
+                ).reset_index(drop=True)
             )
 
         # Numbat
@@ -1419,33 +1468,43 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
         if Path(numbat_cna_file).exists():
             numbat_gene_cna = read_numbat_gene_cna(numbat_cna_file)
 
-            F1s = compute_cna_F1(true_gene_cna, numbat_gene_cna)
+            F1s, precisions, recalls = compute_cna_F1(true_gene_cna, numbat_gene_cna)
 
+            numbat_summary["precision"] = [[precisions[e] for e in list_events]]
+            numbat_summary["recall"] = [[recalls[e] for e in list_events]]
             numbat_summary["F1"] = [[F1s[e] for e in list_events]]
             numbat_summary["est_cna_file"] = numbat_cna_file
         else:
+            numbat_summary["precision"] = [[0.0 for e in list_events]]
+            numbat_summary["recall"] = [[0.0 for e in list_events]]
             numbat_summary["F1"] = [[0.0 for e in list_events]]
             numbat_summary["est_cna_file"] = numbat_cna_file
 
         df_event_f1.append(
-            numbat_summary.explode(["event", "F1"]).reset_index(drop=True)
+            numbat_summary.explode(["event", "F1", "precision", "recall"]).reset_index(
+                drop=True
+            )
         )
 
         # STARCH
         starch_cna_file = get_starch_cna_file(starch_dir, simid)
         starch_gene_cna = read_starch_gene_cna(starch_cna_file)
 
-        F1s = compute_cna_F1(true_gene_cna, starch_gene_cna)
+        F1, precisions, recalls = compute_cna_F1(true_gene_cna, starch_gene_cna)
 
         starch_summary = base_summary.copy()
         starch_summary["method"] = "Starch"
         starch_summary["event"] = [list_events]
+        starch_summary["precision"] = [[precisions[e] for e in list_events]]
+        starch_summary["recall"] = [[recalls[e] for e in list_events]]
         starch_summary["F1"] = [[F1s[e] for e in list_events]]
         starch_summary["true_cna"] = truth_cna_file
         starch_summary["est_cna_file"] = starch_cna_file
 
         df_event_f1.append(
-            starch_summary.explode(["event", "F1"]).reset_index(drop=True)
+            starch_summary.explode(["event", "F1", "precision", "recall"]).reset_index(
+                drop=True
+            )
         )
 
     return pd.concat(df_event_f1, ignore_index=True)
