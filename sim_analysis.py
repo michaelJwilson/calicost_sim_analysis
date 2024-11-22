@@ -680,9 +680,6 @@ def get_truth_cna_file(true_dir, n_cnas, cna_size, ploidy, random):
 
 
 def get_cna_type_v0(A_copy, B_copy):
-    if (A_copy == 1) and (B_copy == 1):
-        raise RuntimeError(f"v0 classification not defined for neutral CNA type (1,1).")
-
     if A_copy + B_copy > 2:
         return "AMP"
     elif A_copy + B_copy < 2:
@@ -710,7 +707,11 @@ def get_cna_type_v1(A_copy, B_copy):
     return ",".join(result)
 
 
-def get_cna_type(A_copy, B_copy, version="v1"):
+def get_cna_type_default():
+    return "v0"
+
+
+def get_cna_type(A_copy, B_copy, version=get_cna_type_default()):
     if version == "v0":
         return get_cna_type_v0(A_copy, B_copy)
     elif version == "v1":
@@ -726,7 +727,7 @@ def read_true_cna(
     ploidy,
     random,
     non_neutral_only=False,
-    ctype_version="v1",
+    ctype_version=get_cna_type_default(),
 ):
     """
     Read true copy number aberrations.
@@ -753,7 +754,7 @@ def read_true_gene_cna(
     random,
     gene_ranges,
     non_neutral_only=False,
-    ctype_version="v1",
+    ctype_version=get_cna_type_default(),
 ):
     """
     Read true copy number aberrations defined on a set of gene ranges.
@@ -833,7 +834,7 @@ def read_calico_gene_cna(
     random,
     initialization_seed,
     non_neutral_only=False,
-    ctype_version="v1",
+    ctype_version=get_cna_type_default(),
 ):
     """
     Read CalicoST estimated copy number aberrations defined on a set of gene ranges.
@@ -862,22 +863,6 @@ def read_calico_gene_cna(
 
     for c in calico_clones:
         cna_type_assay = np.array(["NEU"] * calico_gene_cna.shape[0], dtype="<U25")
-
-        """
-        cna_type_assay[
-            calico_gene_cna[f"{c} A"].values + calico_gene_cna[f"{c} B"].values < 2
-        ] = "DEL"
-
-        cna_type_assay[
-            calico_gene_cna[f"{c} A"].values + calico_gene_cna[f"{c} B"].values > 2
-        ] = "AMP"
-
-        is_cnloh = (
-            calico_gene_cna[f"{c} A"].values + calico_gene_cna[f"{c} B"].values == 2
-        ) & (calico_gene_cna[f"{c} A"].values != calico_gene_cna[f"{c} B"].values)
-
-        cna_type_assay[is_cnloh] = "CNLOH"
-        """
 
         for i in range(calico_gene_cna.shape[0]):
             cna_type_assay[i] = get_cna_type(
