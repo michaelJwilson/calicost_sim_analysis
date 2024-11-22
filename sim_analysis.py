@@ -688,6 +688,7 @@ def get_cna_type_v0(A_copy, B_copy):
         if A_copy == B_copy:
             return "NEU"
         else:
+            # NB defined to be copy neutral, i.e. two copies in total.
             return "CNLOH"
 
 
@@ -820,9 +821,6 @@ def get_calico_cna_file(
         calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
     )
 
-    # TODO if best:
-    # initialization_seed = get_best_r_hmrf(calico_dir, n_cnas, cna_size, ploidy, random)
-
     return f"{Path(config_path).parent}/clone3_rectangle{initialization_seed}_w1.0/cnv_genelevel.tsv"
 
 
@@ -874,7 +872,10 @@ def read_calico_gene_cna(
             if cna_type_assay[i] != "NEU":
                 isin[i] = True
 
-        calico_gene_cna[f"{c}_type"] = cna_type_assay
+        calico_gene_cna[f"{c}_gtype"] = calico_gene_cna.apply(
+            lambda row: f"{row[f'{c} A']}|{row[f'{c} B']}", axis=1
+        )
+        calico_gene_cna[f"{c}_ctype"] = cna_type_assay
 
     if non_neutral_only:
         calico_gene_cna = calico_gene_cna[isin]
@@ -912,6 +913,8 @@ def read_numbat_gene_cna(bulk_clones_final_file):
         fill_value="NEU",
     )
 
+    numbat_gene_cna.columns = numbat_gene_cna.columns.str.replace("_type", "_ctype")
+
     return numbat_gene_cna
 
 
@@ -920,7 +923,7 @@ def read_starch_gene_cna(states_file):
 
     # NB STARCH output is already a gene-by-clone matrix
     starch_gene_cna = starch_gene_cna.replace({0: "DEL", 1: "NEU", 2: "AMP"})
-    starch_gene_cna.columns = "clone_" + starch_gene_cna.columns + "_type"
+    starch_gene_cna.columns = "clone_" + starch_gene_cna.columns + "_ctype"
 
     return starch_gene_cna
 
@@ -942,6 +945,11 @@ def compute_cna_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
     """
     Compute the F1 score of CNA-affected gene prediction.
 
+    Note:
+
+      - The F1 score is gene-based such that identification of the same gene CNA across
+        multiple clones counts as a single success (TODO: fix this).
+
     Attributes
     ----------
     true_gene_cna : pd.DataFrame
@@ -957,14 +965,28 @@ def compute_cna_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
 
             # NB evalues whether any of the available clones matches the event.
             pred_event_genes = set(
-                pred_gene_cna.index[np.any(pred_gene_cna == event, axis=1)]
+                pred_gene_cna.index[
+                    np.any(
+                        pred_gene_cna.map(
+                            lambda xx: event in xx if isinstance(xx, str) else False
+                        ),
+                        axis=1,
+                    )
+                ]
             )
             true_event_genes = set(
-                true_gene_cna.index[np.any(true_gene_cna == event, axis=1)]
+                true_gene_cna.index[
+                    np.any(
+                        true_gene_cna.map(
+                            lambda xx: event in xx if isinstance(xx, str) else False
+                        ),
+                        axis=1,
+                    )
+                ]
             )
         else:
             pred_columns = pred_gene_cna.columns[
-                pred_gene_cna.columns.str.endswith("_type")
+                pred_gene_cna.columns.str.endswith("_ctype")
             ]
 
             # TODO BUG usage of global calico_gene_cna.
@@ -986,6 +1008,9 @@ def compute_cna_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
 
         # NB some genes don't have enough coverage and are filtered out in preprocessing,
         #    so we remove them from true_event_genes.
+        #
+        # NB note filtering against pred_event_genes would yield a bias, as it further filters
+        #    on CNA type, but this is not the case for pred_gene_cna.
         true_event_genes = true_event_genes & set(pred_gene_cna.index)
 
         if len(true_event_genes) == 0:
@@ -1537,7 +1562,7 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
         starch_cna_file = get_starch_cna_file(starch_dir, simid)
         starch_gene_cna = read_starch_gene_cna(starch_cna_file)
 
-        F1, precisions, recalls = compute_cna_F1(true_gene_cna, starch_gene_cna)
+        F1s, precisions, recalls = compute_cna_F1(true_gene_cna, starch_gene_cna)
 
         starch_summary = base_summary.copy()
         starch_summary["method"] = "Starch"
