@@ -702,7 +702,9 @@ def get_cna_type_v1(A_copy, B_copy):
         result.append("AMP")
     if (A_copy < 1) or (B_copy < 1):
         result.append("DEL")
-    if (A_copy == 0) or (B_copy == 0):
+
+    # NB defined to be copy neutral, i.e. two copies in total.
+    if (A_copy == 0) or (B_copy == 0) and (A_copy + B_copy == 2):
         result.append("CNLOH")
 
     return ",".join(result)
