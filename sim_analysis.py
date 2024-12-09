@@ -1,3 +1,5 @@
+import itertools
+import functools
 from pathlib import Path
 
 import warnings
@@ -5,9 +7,11 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 import seaborn as sns
+
 from matplotlib import pyplot as plt
 from sklearn.metrics import adjusted_rand_score
 from sklearn.metrics.cluster import pair_confusion_matrix
+from numba.core.errors import NumbaDeprecationWarning
 
 from calicost import arg_parse
 from calicost.utils_plotting import get_full_palette
@@ -24,6 +28,36 @@ def path_not_exists(path):
         return True
 
     return False
+
+
+def configure_warnings():
+    warnings.filterwarnings("ignore", "is_categorical_dtype")
+    warnings.filterwarnings("ignore", "use_inf_as_na")
+    warnings.simplefilter("ignore", category=NumbaDeprecationWarning)
+    warnings.filterwarnings("ignore", category=pd.errors.DtypeWarning)
+    warnings.filterwarnings("ignore", message="The palette list has more values")
+    warnings.filterwarnings(
+        "ignore",
+        message="set_ticklabels() should only be used with a fixed number of ticks",
+    )
+
+
+def copies_to_rdrbaf(aa, bb):
+    """
+    Convert arrays of A and B allele copies to RDR, BAF
+    arrays.
+    """
+    aa = aa.values
+    bb = bb.values
+
+    return (aa + bb) / 2, np.minimum(aa, bb) / (aa + bb)
+
+
+def majority_true_clone(est_clones):
+    """
+    Compute the majority true clone for each estimated clone.
+    """
+    raise NotImplementedError()
 
 
 def get_gene_ranges_path(calico_repo_dir):
@@ -49,26 +83,26 @@ def read_gene_ranges(calico_repo_dir):
     return gene_ranges[["chr", "start", "end"]]
 
 
-def get_simid(n_cnas, cna_size, ploidy, random):
+def get_simid(cnas, cna_size, ploidy, random):
     """
     Generate simid based on the number of CNAs - (global, shared) - CNA size, ploidy, and random seed.
     """
-    return f"numcnas{n_cnas[0]}.{n_cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
+    return f"numcnas{cnas[0]}.{cnas[1]}_cnasize{cna_size}_ploidy{ploidy}_random{random}"
 
 
-def get_config_path(calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed):
-    simid = get_simid(n_cnas, cna_size, ploidy, random)
-    return f"{calico_dir}/{simid}/configfile{initialization_seed}"
+def get_config_path(calico_dir, cnas, cna_size, ploidy, random, calicost_seed):
+    simid = get_simid(cnas, cna_size, ploidy, random)
+    return f"{calico_dir}/{simid}/configfile{calicost_seed}"
 
 
 def get_config(
-    calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed, verbose=False
+    calico_dir, cnas, cna_size, ploidy, random, calicost_seed, verbose=False
 ):
     """
     Retrieve the CalicoST config.
     """
     configuration_file = get_config_path(
-        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+        calico_dir, cnas, cna_size, ploidy, random, calicost_seed
     )
     config = None
 
@@ -96,28 +130,22 @@ def get_config(
     return config
 
 
-def get_calico_realization_results_path(
-    calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
-):
-    simid = get_simid(n_cnas, cna_size, ploidy, random)
-    config = get_config(
-        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
-    )
+def get_calico_results_path(calico_dir, cnas, cna_size, ploidy, random, calicost_seed):
+    simid = get_simid(cnas, cna_size, ploidy, random)
+    config = get_config(calico_dir, cnas, cna_size, ploidy, random, calicost_seed)
 
     if config is not None:
-        return f"{calico_dir}/{simid}/clone{config['n_clones']}_rectangle{initialization_seed}_w{config['spatial_weight']:.1f}"
+        return f"{calico_dir}/{simid}/clone{config['n_clones']}_rectangle{calicost_seed}_w{config['spatial_weight']:.1f}"
     else:
         return None
 
 
-def get_rdrbaf_path(calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed):
-    config = get_config(
-        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
-    )
+def get_rdrbaf_path(calico_dir, cnas, cna_size, ploidy, random, calicost_seed):
+    config = get_config(calico_dir, cnas, cna_size, ploidy, random, calicost_seed)
 
     if config is not None:
-        results_dir_path = get_calico_realization_results_path(
-            calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+        results_dir_path = get_calico_results_path(
+            calico_dir, cnas, cna_size, ploidy, random, calicost_seed
         )
 
         return f"{results_dir_path}/rdrbaf_final_nstates{config['n_states']}_smp.npz"
@@ -127,11 +155,11 @@ def get_rdrbaf_path(calico_dir, n_cnas, cna_size, ploidy, random, initialization
 
 def get_rdrbaf(
     calico_dir,
-    n_cnas,
+    cnas,
     cna_size,
     ploidy,
     random,
-    initialization_seed,
+    calicost_seed,
     verbose=False,
 ):
     """
@@ -139,15 +167,15 @@ def get_rdrbaf(
     """
     config = get_config(
         calico_dir,
-        n_cnas,
+        cnas,
         cna_size,
         ploidy,
         random,
-        initialization_seed,
+        calicost_seed,
         verbose=verbose,
     )
     rdrbaf_path = get_rdrbaf_path(
-        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+        calico_dir, cnas, cna_size, ploidy, random, calicost_seed
     )
 
     if rdrbaf_path is not None and Path(rdrbaf_path).exists():
@@ -164,36 +192,43 @@ def get_rdrbaf(
         return None
 
 
-def get_r_hmrf_likelihoods(
+def get_r_hmrf_loglikelihood(
     calico_dir,
-    n_cnas,
+    cnas,
     cna_size,
     ploidy,
     random,
+    initialization=None,
     exp_initialization_num=5,
     verbose=False,
 ):
     """
-    Retrieve the CalicoST random initializations likelihoods.
+    Retrieve the CalicoST random initializations likelihoods
+    for a given run, (n_cnas, cna_size, ploidy, random).
     """
     # NB find the best HMRF initialization random seed
     df_clone = []
 
-    for initialization_seed in range(exp_initialization_num):
+    if initialization is None:
+        seeds = range(exp_initialization_num)
+    else:
+        seeds = [initialization]
+
+    for seed in seeds:
         rdrbaf = get_rdrbaf(
             calico_dir,
-            n_cnas,
+            cnas,
             cna_size,
             ploidy,
             random,
-            initialization_seed,
+            seed,
         )
 
         if rdrbaf is not None:
             df_clone.append(
                 pd.DataFrame(
                     {
-                        "initialization_seed": initialization_seed,
+                        "calicost_seed": seed,
                         "log_likelihood": rdrbaf["total_llf"],
                     },
                     index=[0],
@@ -201,7 +236,7 @@ def get_r_hmrf_likelihoods(
             )
         else:
             rdrbaf_path = get_rdrbaf_path(
-                calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+                calico_dir, cnas, cna_size, ploidy, random, seed
             )
             warnings.warn(f"{rdrbaf_path} does not exist.")
 
@@ -210,7 +245,7 @@ def get_r_hmrf_likelihoods(
 
 def get_best_r_hmrf(
     calico_dir,
-    n_cnas,
+    cnas,
     cna_size,
     ploidy,
     random,
@@ -219,11 +254,11 @@ def get_best_r_hmrf(
     """
     Retrieve the CalicoST random initialization with the maximum likelihood.
     """
-    df_clone = get_r_hmrf_likelihoods(calico_dir, n_cnas, cna_size, ploidy, random)
+    df_clone = get_r_hmrf_loglikelihood(calico_dir, cnas, cna_size, ploidy, random)
 
     # NB returns first of degenerate max., i.e. 0 if all the likelihoods are the same.
     return (
-        int(df_clone["initialization_seed"].iloc[np.argmax(df_clone["log_likelihood"])])
+        int(df_clone["calicost_seed"].iloc[np.argmax(df_clone["log_likelihood"])])
         if df_clone is not None
         else -1
     )
@@ -240,14 +275,12 @@ def filter_non_netural(cna_frame):
 
     clones = columns[isin].values
 
-    isin, isglobal = [], []
+    isin = []
 
     for index, row in cna_frame.iterrows():
         isin.append(not np.all(row[clones] == 1))
-        isglobal.append(row.nunique() == 1)
 
-    cna_seglevel = cna_frame[isin].reset_index(drop=True)
-    cna_seglevel["global_cna"] = np.array(isglobal)[isin]
+    cna_seglevel = cna_frame[isin]
 
     return cna_seglevel
 
@@ -279,21 +312,23 @@ def get_cna_seglevel(
     return cna_seglevel
 
 
-def get_binned_data(calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed):
-    outdir = get_calico_realization_results_path(
-        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+def get_calicost_results(
+    calico_dir, cnas, cna_size, ploidy, random, calicost_seed, name
+):
+    outdir = get_calico_results_path(
+        calico_dir, cnas, cna_size, ploidy, random, calicost_seed
     )
 
-    return np.load(f"{outdir}/binned_data.npz", allow_pickle=True)
+    return np.load(f"{outdir}/{name}", allow_pickle=True)
 
 
 def plot_rdr_baf(
     calico_dir,
-    n_cnas,
+    cnas,
     cna_size,
     ploidy,
     random,
-    initialization_seed,
+    calicost_seed,
     clone_ids=None,
     clone_names=None,
     remove_xticks=True,
@@ -304,10 +339,10 @@ def plot_rdr_baf(
     linewidth=1,
     palette="chisel",
 ):
-    simid = get_simid(n_cnas, cna_size, ploidy, random)
+    simid = get_simid(cnas, cna_size, ploidy, random)
 
-    cna_path = get_cna_seglevel_path(calico_dir, simid, initialization_seed)
-    df_cnv = get_cna_seglevel(calico_dir, simid, initialization_seed)
+    cna_path = get_cna_seglevel_path(calico_dir, simid, calicost_seed)
+    df_cnv = get_cna_seglevel(calico_dir, simid, calicost_seed)
 
     final_clone_ids = np.unique([x.split(" ")[0][5:] for x in df_cnv.columns[3:]])
 
@@ -324,8 +359,8 @@ def plot_rdr_baf(
 
     unique_chrs = np.unique(df_cnv.chr.values)
 
-    dat = get_binned_data(
-        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+    dat = get_calicost_results(
+        calico_dir, cnas, cna_size, ploidy, random, calicost_seed, "binned_data.npz"
     )
 
     lengths = dat["lengths"]
@@ -335,11 +370,11 @@ def plot_rdr_baf(
     single_tumor_prop = dat["single_tumor_prop"]
     res_combine = get_rdrbaf(
         calico_dir,
-        n_cnas,
+        cnas,
         cna_size,
         ploidy,
         random,
-        initialization_seed,
+        calicost_seed,
         verbose=False,
     )
 
@@ -354,9 +389,7 @@ def plot_rdr_baf(
         for c, cid in enumerate(final_clone_ids)
     ]
 
-    config = get_config(
-        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
-    )
+    config = get_config(calico_dir, cnas, cna_size, ploidy, random, calicost_seed)
 
     if config["tumorprop_file"] is None:
         X, base_nb_mean, total_bb_RD = merge_pseudobulk_by_index(
@@ -674,12 +707,20 @@ def plot_rdr_baf(
     return fig
 
 
-def get_truth_cna_file(true_dir, n_cnas, cna_size, ploidy, random):
-    simid = get_simid(n_cnas, cna_size, ploidy, random)
+def get_truth_cna_file(true_dir, cnas, cna_size, ploidy, random):
+    simid = get_simid(cnas, cna_size, ploidy, random)
     return f"{true_dir}/{simid}/truth_cna.tsv"
 
 
-def get_cna_type_v0(A_copy, B_copy):
+def get_cna_type(A_copy, B_copy):
+    """
+    CNA type classification via total copy number,
+    including copy neutral loss of heterozygosity (CNLOH).
+        - AMP: A_copy + B_copy > 2
+        - DEL: A_copy + B_copy < 2
+        - NEU: A_copy == B_copy == 1
+        - CNLOH: (A_copy != B_copy, A_copy + B_copy == 2)
+    """
     if A_copy + B_copy > 2:
         return "AMP"
     elif A_copy + B_copy < 2:
@@ -692,84 +733,69 @@ def get_cna_type_v0(A_copy, B_copy):
             return "CNLOH"
 
 
-def get_cna_type_v1(A_copy, B_copy):
-    if (A_copy == 1) and (B_copy == 1):
-        return "NEU"
+def map_unique_entries(array):
+    known = {}
 
-    result = []
+    ids = []
 
-    if (A_copy > 1) or (B_copy > 1):
-        result.append("AMP")
-    if (A_copy < 1) or (B_copy < 1):
-        result.append("DEL")
+    for _, xx in enumerate(array):
+        if xx not in known:
+            known[xx] = len(known)
 
-    # NB defined to be copy neutral, i.e. two copies in total.
-    if (A_copy == 0) or (B_copy == 0) and (A_copy + B_copy == 2):
-        result.append("CNLOH")
+        ids.append(known[xx])
 
-    return ",".join(result)
-
-
-def get_cna_type_default():
-    return "v0"
-
-
-def get_cna_type(A_copy, B_copy, version=get_cna_type_default()):
-    if version == "v0":
-        return get_cna_type_v0(A_copy, B_copy)
-    elif version == "v1":
-        return get_cna_type_v1(A_copy, B_copy)
-    else:
-        raise ValueError(f"CNA type classification version {version} not recognized.")
+    return np.array(ids).astype(int)
 
 
 def read_true_cna(
     true_dir,
-    n_cnas,
+    cnas,
     cna_size,
     ploidy,
     random,
     non_neutral_only=False,
-    ctype_version=get_cna_type_default(),
 ):
     """
     Read true copy number aberrations.
     """
-    truth_cna_file = get_truth_cna_file(true_dir, n_cnas, cna_size, ploidy, random)
+    truth_cna_file = get_truth_cna_file(true_dir, cnas, cna_size, ploidy, random)
     df_cna = pd.read_csv(truth_cna_file, header=0, index_col=0, sep="\t")
 
     df_cna["cna_gtype"] = df_cna.apply(
         lambda row: f"{row['A_copy']}|{row['B_copy']}", axis=1
     )
     df_cna["cna_ctype"] = df_cna.apply(
-        lambda row: get_cna_type(row["A_copy"], row["B_copy"], version=ctype_version),
+        lambda row: get_cna_type(row["A_copy"], row["B_copy"]),
         axis=1,
     )
 
-    return df_cna
+    df_cna["cna_id"] = df_cna.apply(
+        lambda row: f"{row['chr']}:{row['start']}-{row['end']}", axis=1
+    )
+    df_cna["cna_id"] = map_unique_entries(df_cna["cna_id"].values)
+
+    return df_cna.sort_values(by=["clone", "chr", "start", "end"])
 
 
 def read_true_gene_cna(
     true_dir,
-    n_cnas,
+    cnas,
     cna_size,
     ploidy,
     random,
     gene_ranges,
     non_neutral_only=False,
-    ctype_version=get_cna_type_default(),
 ):
     """
     Read true copy number aberrations defined on a set of gene ranges.
     """
     df_cna = read_true_cna(
         true_dir,
-        n_cnas,
+        cnas,
         cna_size,
         ploidy,
         random,
         non_neutral_only=False,
-        ctype_version=ctype_version,
     )
 
     true_gene_cna = gene_ranges.copy()
@@ -816,31 +842,29 @@ def read_true_gene_cna(
     return true_gene_cna
 
 
-def get_calico_cna_file(
-    calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
-):
+def get_calico_cna_file(calico_dir, cnas, cna_size, ploidy, random, calicost_seed):
     config_path = get_config_path(
-        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+        calico_dir, cnas, cna_size, ploidy, random, calicost_seed
     )
 
-    return f"{Path(config_path).parent}/clone3_rectangle{initialization_seed}_w1.0/cnv_genelevel.tsv"
+    return f"{Path(config_path).parent}/clone3_rectangle{calicost_seed}_w1.0/cnv_genelevel.tsv"
 
 
 def read_calico_gene_cna(
     calico_dir,
-    n_cnas,
+    cnas,
     cna_size,
     ploidy,
     random,
-    initialization_seed,
+    calicost_seed,
     non_neutral_only=False,
-    ctype_version=get_cna_type_default(),
+    calico_repo_dir=None,
 ):
     """
     Read CalicoST estimated copy number aberrations defined on a set of gene ranges.
     """
     fpath = get_calico_cna_file(
-        calico_dir, n_cnas, cna_size, ploidy, random, initialization_seed
+        calico_dir, cnas, cna_size, ploidy, random, calicost_seed
     )
 
     if path_not_exists(fpath):
@@ -859,6 +883,8 @@ def read_calico_gene_cna(
         .str[0]
     )
 
+    calico_gene_cna.columns = [xx.lower() for xx in calico_gene_cna.columns]
+
     isin = np.array([False] * len(calico_gene_cna))
 
     for c in calico_clones:
@@ -866,21 +892,24 @@ def read_calico_gene_cna(
 
         for i in range(calico_gene_cna.shape[0]):
             cna_type_assay[i] = get_cna_type(
-                calico_gene_cna[f"{c} A"].values[i],
-                calico_gene_cna[f"{c} B"].values[i],
-                version=ctype_version,
+                calico_gene_cna[f"{c} a"].values[i],
+                calico_gene_cna[f"{c} b"].values[i],
             )
 
             if cna_type_assay[i] != "NEU":
                 isin[i] = True
 
         calico_gene_cna[f"{c}_gtype"] = calico_gene_cna.apply(
-            lambda row: f"{row[f'{c} A']}|{row[f'{c} B']}", axis=1
+            lambda row: f"{row[f'{c} a']}|{row[f'{c} b']}", axis=1
         )
         calico_gene_cna[f"{c}_ctype"] = cna_type_assay
 
     if non_neutral_only:
         calico_gene_cna = calico_gene_cna[isin]
+
+    if calico_repo_dir is not None:
+        ranges = read_gene_ranges(calico_repo_dir)
+        calico_gene_cna = ranges.join(calico_gene_cna, how="right")
 
     return calico_gene_cna
 
@@ -943,7 +972,7 @@ def compute_F1(precision, recall, null=0.0):
 
 
 # TODO BUG null_value=0.0 -> null_value=np.nan
-def compute_cna_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
+def compute_gene_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
     """
     Compute the F1 score of CNA-affected gene prediction.
 
@@ -1038,7 +1067,7 @@ def compute_cna_F1(true_gene_cna, pred_gene_cna, null_value=0.0):
 
 def get_sim_params():
     return {
-        "all_n_cnas": [(1, 2), (3, 3), (6, 3)],
+        "all_cnas": [(1, 2), (3, 3), (6, 3)],
         "all_cna_sizes": ["1e7", "3e7", "5e7"],
         "all_ploidy": [2],
         "all_random": np.arange(10),
@@ -1048,49 +1077,44 @@ def get_sim_params():
 def get_sim_run_generator():
     sim_params = get_sim_params()
 
-    for n_cnas in sim_params["all_n_cnas"]:
+    for cnas in sim_params["all_cnas"]:
         for cna_size in sim_params["all_cna_sizes"]:
             for ploidy in sim_params["all_ploidy"]:
                 for random in sim_params["all_random"]:
-                    yield n_cnas, cna_size, ploidy, random
+                    yield cnas, cna_size, ploidy, random
 
 
-def get_sim_runs(calico_dir=None):
-    df = pd.DataFrame(
-        [
+def get_sim_runs():
+    result = []
+
+    for cnas, cna_size, ploidy, random in get_sim_run_generator():
+        result.append(
             {
-                "n_cnas": n_cnas,
+                "simid": get_simid(cnas, cna_size, ploidy, random),
+                "cnas": cnas,
+                "n_cnas": int(cnas[0] + cnas[1]),
                 "cna_size": cna_size,
                 "ploidy": ploidy,
                 "random": random,
-                "simid": get_simid(n_cnas, cna_size, ploidy, random),
+                "simid": get_simid(cnas, cna_size, ploidy, random),
             }
-            for n_cnas, cna_size, ploidy, random in get_sim_run_generator()
-        ]
-    )
-
-    # NB 3x (global, local), 3x CNA size, 10x random.
-    assert len(df) == 90
-
-    if calico_dir is not None:
-        likelihoods = [
-            get_r_hmrf_likelihoods(calico_dir, n_cnas, cna_size, ploidy, random)
-            for n_cnas, cna_size, ploidy, random in get_sim_run_generator()
-        ]
-        df["nvalid"] = list(
-            map(lambda xx: len(xx) if xx is not None else 0, likelihoods)
         )
+
+    df = pd.DataFrame(result)
+
+    # NB 3x (global, local), 3x CNA size, 10x random, 5x initialization with potential failures.
+    # assert len(df) ~= 90 x 5
 
     return df
 
 
-def get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random):
-    simid = get_simid(n_cnas, cna_size, ploidy, random)
+def get_true_clones_path(true_dir, cnas, cna_size, ploidy, random):
+    simid = get_simid(cnas, cna_size, ploidy, random)
     return f"{true_dir}/{simid}/truth_clone_labels.tsv"
 
 
-def get_true_clones(true_dir, n_cnas, cna_size, ploidy, random, verbose=False):
-    true_clones_path = get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random)
+def get_true_clones(true_dir, cnas, cna_size, ploidy, random, verbose=False):
+    true_clones_path = get_true_clones_path(true_dir, cnas, cna_size, ploidy, random)
 
     if verbose:
         print("Reading True clones from", true_clones_path)
@@ -1112,23 +1136,21 @@ def __normal_clone_sorter(x):
     return (x != "normal", x)
 
 
-def plot_clones(clones, n_cnas, cna_size, ploidy, random, truth=False):
+def plot_clones(clones, cnas, cna_size, ploidy, random, column="est_clone"):
     if clones is None:
         warnings.warn("No clones to plot.")
         return
 
     clones = clones.copy()
 
-    column = "true_clone" if truth else "est_clone"
-
     labels = clones[column].unique()
     labels = np.array(sorted(labels, key=__normal_clone_sorter))
 
-    title = f"{n_cnas[0]}/{n_cnas[0]} ({cna_size} MB), {random} real." + r" $\ell$"
+    title = f"{cnas[0]}/{cnas[1]} ({cna_size} MB), {random} real." + r" $\ell$"
 
-    if not truth:
+    if column != "true_clone":
         ari = adjusted_rand_score(
-            clones.est_clone,
+            getattr(clones, column),
             clones.true_clone,
         )
 
@@ -1170,25 +1192,32 @@ def plot_clones(clones, n_cnas, cna_size, ploidy, random, truth=False):
     return fig
 
 
-def get_calico_best_clones_path(calico_dir, n_cnas, cna_size, ploidy, random):
-    simid = get_simid(n_cnas, cna_size, ploidy, random)
-    r_calico = get_best_r_hmrf(
-        calico_dir,
-        n_cnas,
-        cna_size,
-        ploidy,
-        random,
-    )
+def get_calico_initial_clones_path(
+    calico_dir, cnas, cna_size, ploidy, random, calicost_seed
+):
+    simid = get_simid(cnas, cna_size, ploidy, random)
+    return f"{calico_dir}/{simid}/clone3_rectangle{calicost_seed}_w1.0/allspots_nstates7_sp.npz"
+
+
+def get_calico_clones_path(calico_dir, cnas, cna_size, ploidy, random, calicost_seed):
+    simid = get_simid(cnas, cna_size, ploidy, random)
 
     # TODO results dir path.
-    return f"{calico_dir}/{simid}/clone3_rectangle{r_calico}_w1.0/clone_labels.tsv"
+    return f"{calico_dir}/{simid}/clone3_rectangle{calicost_seed}_w1.0/clone_labels.tsv"
 
 
-def get_calico_best_clones(
-    calico_dir, n_cnas, cna_size, ploidy, random, true_dir=None, verbose=False
+def get_calico_clones(
+    calico_dir,
+    cnas,
+    cna_size,
+    ploidy,
+    random,
+    calicost_seed,
+    true_dir=None,
+    verbose=False,
 ):
-    calico_clones_path = get_calico_best_clones_path(
-        calico_dir, n_cnas, cna_size, ploidy, random
+    calico_clones_path = get_calico_clones_path(
+        calico_dir, cnas, cna_size, ploidy, random, calicost_seed
     )
 
     if path_not_exists(calico_clones_path):
@@ -1207,21 +1236,65 @@ def get_calico_best_clones(
 
     # NB join with (x,y) based on spot coordinate of truth.
     if true_dir is not None:
-        true_clones = get_true_clones(true_dir, n_cnas, cna_size, ploidy, random)
+        true_clones = get_true_clones(true_dir, cnas, cna_size, ploidy, random)
         calico_clones = calico_clones.join(true_clones)
+
+    initial_clones_path = get_calico_initial_clones_path(
+        calico_dir, cnas, cna_size, ploidy, random, calicost_seed
+    )
+    allspots = np.load(initial_clones_path)
+
+    calico_clones["initial_clone"] = allspots["round-1_assignment"]
 
     return calico_clones
 
 
-def get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random):
-    simid = get_simid(n_cnas, cna_size, ploidy, random)
+def get_calico_best_clones_path(calico_dir, cnas, cna_size, ploidy, random):
+    best_initialization = get_best_r_hmrf(
+        calico_dir,
+        cnas,
+        cna_size,
+        ploidy,
+        random,
+    )
+
+    return get_calico_clones_path(
+        calico_dir, cnas, cna_size, ploidy, random, best_initialization
+    )
+
+
+def get_calico_best_clones(
+    calico_dir, cnas, cna_size, ploidy, random, true_dir=None, verbose=False
+):
+    best_initialization = get_best_r_hmrf(
+        calico_dir,
+        cnas,
+        cna_size,
+        ploidy,
+        random,
+    )
+
+    return get_calico_clones(
+        calico_dir,
+        cnas,
+        cna_size,
+        ploidy,
+        random,
+        best_initialization,
+        true_dir=None,
+        verbose=False,
+    )
+
+
+def get_numbat_path(numbat_dir, cnas, cna_size, ploidy, random):
+    simid = get_simid(cnas, cna_size, ploidy, random)
     return f"{numbat_dir}/{simid}/outs/clone_post_2.tsv"
 
 
 def get_numbat_clones(
-    numbat_dir, n_cnas, cna_size, ploidy, random, true_clones=None, verbose=False
+    numbat_dir, cnas, cna_size, ploidy, random, true_clones=None, verbose=False
 ):
-    numbat_path = get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random)
+    numbat_path = get_numbat_path(numbat_dir, cnas, cna_size, ploidy, random)
 
     if Path(numbat_path).exists():
         if verbose:
@@ -1252,15 +1325,15 @@ def get_numbat_clones(
     return numbat_clones
 
 
-def get_starch_path(starch_dir, n_cnas, cna_size, ploidy, random):
-    simid = get_simid(n_cnas, cna_size, ploidy, random)
+def get_starch_path(starch_dir, cnas, cna_size, ploidy, random):
+    simid = get_simid(cnas, cna_size, ploidy, random)
     return f"{starch_dir}/{simid}/labels_STITCH_output.csv"
 
 
 def get_starch_clones(
-    starch_dir, n_cnas, cna_size, ploidy, random, true_clones=None, verbose=False
+    starch_dir, cnas, cna_size, ploidy, random, true_clones=None, verbose=False
 ):
-    starch_path = get_starch_path(starch_dir, n_cnas, cna_size, ploidy, random)
+    starch_path = get_starch_path(starch_dir, cnas, cna_size, ploidy, random)
 
     if verbose:
         print("Reading Starch clones from", starch_path)
@@ -1290,15 +1363,15 @@ def get_starch_clones(
     return starch_clones
 
 
-def get_base_sim_summary(n_cnas, cna_size, ploidy, random, simid, true_path):
+def get_base_sim_summary(cnas, cna_size, ploidy, random, simid, true_path):
     return pd.DataFrame(
         {
-            "cnas": f"{n_cnas[0], n_cnas[1]}",
-            "n_cnas": n_cnas[0] + n_cnas[1],
+            "simid": simid,
+            "cnas": f"{cnas[0], cnas[1]}",
+            "n_cnas": int(cnas[0] + cnas[1]),
             "cna_size": __cnasize_mapper[cna_size],
             "ploidy": int(ploidy),
             "random": random,
-            "sample_id": simid,
             "true_clones_path": true_path,
         },
         index=[0],
@@ -1315,54 +1388,30 @@ def get_pair_recall(est_label, true_label):
 
 
 def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
+    """
+    Compute the ARI and recall of the best-clone estimation by various
+    methods.
+    """
     sim_params = get_sim_params()
     df_clone_ari = []
 
-    for n_cnas, cna_size, ploidy, random in get_sim_run_generator():
-        true_path = get_true_clones_path(true_dir, n_cnas, cna_size, ploidy, random)
-        true_clones = get_true_clones(true_dir, n_cnas, cna_size, ploidy, random)
+    for cnas, cna_size, ploidy, random in get_sim_run_generator():
+        simid = get_simid(cnas, cna_size, ploidy, random)
 
-        simid = get_simid(n_cnas, cna_size, ploidy, random)
+        true_path = get_true_clones_path(true_dir, cnas, cna_size, ploidy, random)
+        true_clones = get_true_clones(true_dir, cnas, cna_size, ploidy, random)
 
         base_summary = get_base_sim_summary(
-            n_cnas, cna_size, ploidy, random, simid, true_path
+            cnas, cna_size, ploidy, random, simid, true_path
         )
-
-        # -- CalicoST --
-        best_clones_path = get_calico_best_clones_path(
-            calico_dir, n_cnas, cna_size, ploidy, random
-        )
-
-        calico_clones = get_calico_best_clones(
-            calico_dir, n_cnas, cna_size, ploidy, random
-        )
-
-        if calico_clones is not None:
-            calico_clones = calico_clones.join(true_clones)
-
-            calicost_summary = base_summary.copy()
-            calicost_summary["method"] = "CalicoST"
-
-            # NB fraction of all spot pairs that share a clone in truth, and share a clone in estimation.
-            calicost_summary["recall"] = get_pair_recall(
-                calico_clones.est_clone, calico_clones.true_clone
-            )
-
-            calicost_summary["ari"] = adjusted_rand_score(
-                calico_clones.est_clone,
-                calico_clones.true_clone,
-            )
-            calicost_summary["best_clones_path"] = best_clones_path
-
-            df_clone_ari.append(calicost_summary)
 
         # -- Numbat --
-        numbat_path = get_numbat_path(numbat_dir, n_cnas, cna_size, ploidy, random)
-        numbat_clones = get_numbat_clones(numbat_dir, n_cnas, cna_size, ploidy, random)
+        numbat_path = get_numbat_path(numbat_dir, cnas, cna_size, ploidy, random)
+        numbat_clones = get_numbat_clones(numbat_dir, cnas, cna_size, ploidy, random)
 
         numbat_summary = base_summary.copy()
         numbat_summary["method"] = "Numbat"
-        numbat_summary["best_clones_path"] = numbat_path
+        numbat_summary["clones_path"] = numbat_path
 
         if numbat_clones is not None:
             numbat_clones = numbat_clones.join(true_clones)
@@ -1373,19 +1422,21 @@ def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
                 numbat_clones.est_clone,
                 numbat_clones.true_clone,
             )
+            numbat_summary["method_best"] = 1
 
         else:
             numbat_summary["recall"] = 0.0
             numbat_summary["ari"] = 0.0
-            numbat_summary["best_clones_path"] = numbat_path
+            numbat_summary["method_best"] = 1
+            numbat_summary["clones_path"] = numbat_path
 
         df_clone_ari.append(numbat_summary)
 
         # -- STARCH --
-        starch_path = get_starch_path(starch_dir, n_cnas, cna_size, ploidy, random)
+        starch_path = get_starch_path(starch_dir, cnas, cna_size, ploidy, random)
         starch_clones = get_starch_clones(
             starch_dir,
-            n_cnas,
+            cnas,
             cna_size,
             ploidy,
             random,
@@ -1401,11 +1452,64 @@ def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
             starch_clones.est_clone,
             starch_clones.true_clone,
         )
-        starch_summary["best_clones_path"] = starch_path
+        starch_summary["method_best"] = 1
+        starch_summary["clones_path"] = starch_path
 
         df_clone_ari.append(starch_summary)
 
-    # TODO .sort_values(by='cna_size', ascending=False)
+        # -- CalicoST --
+        best_seed = get_best_r_hmrf(
+            calico_dir,
+            cnas,
+            cna_size,
+            ploidy,
+            random,
+        )
+
+        for seed in range(5):
+            clones_path = get_calico_clones_path(
+                calico_dir, cnas, cna_size, ploidy, random, seed
+            )
+
+            calico_clones = get_calico_clones(
+                calico_dir, cnas, cna_size, ploidy, random, seed
+            )
+
+            if calico_clones is not None:
+                calico_clones = calico_clones.join(true_clones)
+
+                calicost_summary = base_summary.copy()
+                calicost_summary["method"] = "CalicoST"
+                calicost_summary["calicost_seed"] = int(seed)
+                calicost_summary["method_best"] = int(seed == best_seed)
+
+                # NB fraction of all spot pairs that share a clone in truth, and share a clone in estimation.
+                calicost_summary["recall"] = get_pair_recall(
+                    calico_clones.est_clone, calico_clones.true_clone
+                )
+
+                # NB measures pairs with disjoint clusters in truth and estimate as a success, irrespective of
+                #    whether the clusters are correctly assigned.
+                calicost_summary["ari"] = adjusted_rand_score(
+                    calico_clones.est_clone,
+                    calico_clones.true_clone,
+                )
+
+                log_likelihood = get_r_hmrf_loglikelihood(
+                    calico_dir, cnas, cna_size, ploidy, random, initialization=seed
+                )
+
+                log_likelihood = (
+                    log_likelihood["log_likelihood"].values[0]
+                    if log_likelihood is not None
+                    else np.nan
+                )
+
+                calicost_summary["calicost_log_likelihood"] = log_likelihood
+                calicost_summary["clones_path"] = clones_path
+
+                df_clone_ari.append(calicost_summary)
+
     df_clone_ari = pd.concat(df_clone_ari, ignore_index=True)
     df_clone_ari.cna_size = pd.Categorical(
         df_clone_ari.cna_size, categories=["10Mb", "30Mb", "50Mb"], ordered=True
@@ -1417,17 +1521,18 @@ def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
         overwrite=False,
     ).set_sticky(axis="columns")
 
-    return df_clone_ari
+    return df_clone_ari.sort_values(by="ari", ascending=False)
 
 
 def plot_clone_aris(df_clone_ari):
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True, dpi=300)
-    color_methods = ["#4963C1", "#97b085", "#dad67d"]
+    colors = ["#4963C1", "#97b085", "#dad67d"]
 
     palette = sns.color_palette()
 
     for i, n_cnas in enumerate([3, 6, 9]):
         tmpdf = df_clone_ari[df_clone_ari.n_cnas == n_cnas]
+        tmpdf = tmpdf.sort_values(by="method")
 
         sns.boxplot(
             data=tmpdf,
@@ -1456,9 +1561,9 @@ def plot_clone_aris(df_clone_ari):
         if (i + 1) < 3:
             axes[i].get_legend().remove()
 
-        axes[i].set_ylim(0.0, 1.0)
+        axes[i].set_ylim(-0.05, 1.05)
         axes[i].set_ylabel("Clone ARI")
-        axes[i].set_xlabel("Simulated CNA length")
+        axes[i].set_xlabel("CNA span")
         axes[i].set_title(f"{n_cnas} CNA events")
 
     h, l = axes[-1].get_legend_handles_labels()
@@ -1487,32 +1592,32 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
 
     df_event_f1 = []
 
-    for n_cnas, cna_size, ploidy, random in get_sim_run_generator():
-        simid = get_simid(n_cnas, cna_size, ploidy, random)
+    for cnas, cna_size, ploidy, random in get_sim_run_generator():
+        simid = get_simid(cnas, cna_size, ploidy, random)
 
-        truth_cna_file = get_truth_cna_file(true_dir, n_cnas, cna_size, ploidy, random)
+        truth_cna_file = get_truth_cna_file(true_dir, cnas, cna_size, ploidy, random)
         true_gene_cna = read_true_gene_cna(
-            true_dir, n_cnas, cna_size, ploidy, random, gene_ranges
+            true_dir, cnas, cna_size, ploidy, random, gene_ranges
         )
 
         base_summary = get_base_sim_summary(
-            n_cnas, cna_size, ploidy, random, simid, truth_cna_file
+            cnas, cna_size, ploidy, random, simid, truth_cna_file
         )
 
         # CalicoST
-        best_run_initialization = get_best_r_hmrf(
-            calico_dir, n_cnas, cna_size, ploidy, random
+        best_initialization = get_best_r_hmrf(
+            calico_dir, cnas, cna_size, ploidy, random
         )
 
         configuration_file = get_config_path(
-            calico_dir, n_cnas, cna_size, ploidy, random, best_run_initialization
+            calico_dir, cnas, cna_size, ploidy, random, best_initialization
         )
         calico_gene_cna = read_calico_gene_cna(
-            calico_dir, n_cnas, cna_size, ploidy, random, best_run_initialization
+            calico_dir, cnas, cna_size, ploidy, random, best_initialization
         )
 
         if calico_gene_cna is not None:
-            F1s, precisions, recalls = compute_cna_F1(true_gene_cna, calico_gene_cna)
+            F1s, precisions, recalls = compute_gene_F1(true_gene_cna, calico_gene_cna)
 
             calicost_summary = base_summary.copy()
             calicost_summary["method"] = "CalicoST"
@@ -1522,7 +1627,7 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
             calicost_summary["F1"] = [[F1s[e] for e in list_events]]
             calicost_summary["true_cna"] = truth_cna_file
             calicost_summary["est_cna_file"] = get_calico_cna_file(
-                calico_dir, n_cnas, cna_size, ploidy, random, best_run_initialization
+                calico_dir, cnas, cna_size, ploidy, random, best_initialization
             )
 
             df_event_f1.append(
@@ -1542,7 +1647,7 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
         if Path(numbat_cna_file).exists():
             numbat_gene_cna = read_numbat_gene_cna(numbat_cna_file)
 
-            F1s, precisions, recalls = compute_cna_F1(true_gene_cna, numbat_gene_cna)
+            F1s, precisions, recalls = compute_gene_F1(true_gene_cna, numbat_gene_cna)
 
             numbat_summary["precision"] = [[precisions[e] for e in list_events]]
             numbat_summary["recall"] = [[recalls[e] for e in list_events]]
@@ -1564,7 +1669,7 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
         starch_cna_file = get_starch_cna_file(starch_dir, simid)
         starch_gene_cna = read_starch_gene_cna(starch_cna_file)
 
-        F1s, precisions, recalls = compute_cna_F1(true_gene_cna, starch_gene_cna)
+        F1s, precisions, recalls = compute_gene_F1(true_gene_cna, starch_gene_cna)
 
         starch_summary = base_summary.copy()
         starch_summary["method"] = "Starch"
@@ -1598,10 +1703,10 @@ def plot_cna_f1s(df_event_f1):
     palette = sns.color_palette()
 
     for i, cnasize in enumerate(sim_params["all_cna_sizes"][::-1] + ["-1"]):
-        for j, n_cnas in enumerate(sim_params["all_n_cnas"]):
-            num_n_cnas = sum(n_cnas)
+        for j, cnas in enumerate(sim_params["all_cnas"]):
+            num_cnas = sum(cnas)
 
-            isin = df_event_f1.n_cnas == num_n_cnas
+            isin = df_event_f1.n_cnas == num_cnas
 
             if cnasize != "-1":
                 isin &= df_event_f1.cna_size == __cnasize_mapper[cnasize]
@@ -1645,7 +1750,7 @@ def plot_cna_f1s(df_event_f1):
         h[:3], l[:3], loc="upper left", bbox_to_anchor=(1, 1), frameon=False
     )
 
-    for j, n_cnas in enumerate(sim_params["all_n_cnas"]):
+    for j, n_cnas in enumerate(sim_params["all_cnas"]):
         axes[0, j].set_title(f"{n_cnas} CNAs")
 
     fig.tight_layout()
