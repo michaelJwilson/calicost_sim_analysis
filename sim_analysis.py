@@ -63,7 +63,7 @@ def get_gene_ranges_path(calico_repo_dir):
 
 def read_gene_ranges(calico_repo_dir):
     """
-    Read in (chronological order, start, end) table for (coding) gene definition.
+    Read in (contig, start, end) table for (coding) gene definition.
     """
     gene_ranges_path = get_gene_ranges_path(calico_repo_dir)
 
