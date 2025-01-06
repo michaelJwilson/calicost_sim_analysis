@@ -1,11 +1,8 @@
-import itertools
-import functools
 from pathlib import Path
 
 import warnings
 import numpy as np
 import pandas as pd
-import scanpy as sc
 import seaborn as sns
 
 from matplotlib import pyplot as plt
@@ -198,7 +195,33 @@ def get_r_hmrf_loglikelihood(
     cna_size,
     ploidy,
     random,
-    initialization=None,
+    seed,
+):
+    """
+    Retrieve the CalicoST random initializations likelihoods
+    for a given run, (n_cnas, cna_size, ploidy, random).
+    """
+    rdrbaf = get_rdrbaf(
+        calico_dir,
+        cnas,
+        cna_size,
+        ploidy,
+        random,
+        seed,
+    )
+
+    if rdrbaf is not None:
+        return (seed, rdrbaf["total_llf"])
+    else:
+        return None
+
+
+def get_r_hmrf_loglikelihoods(
+    calico_dir,
+    cnas,
+    cna_size,
+    ploidy,
+    random,
     exp_initialization_num=5,
     verbose=False,
 ):
@@ -209,13 +232,8 @@ def get_r_hmrf_loglikelihood(
     # NB find the best HMRF initialization random seed
     df_clone = []
 
-    if initialization is None:
-        seeds = range(exp_initialization_num)
-    else:
-        seeds = [initialization]
-
-    for seed in seeds:
-        rdrbaf = get_rdrbaf(
+    for seed in range(exp_initialization_num):
+        loglike = get_r_hmrf_loglikelihood(
             calico_dir,
             cnas,
             cna_size,
@@ -224,12 +242,12 @@ def get_r_hmrf_loglikelihood(
             seed,
         )
 
-        if rdrbaf is not None:
+        if loglike is not None:
             df_clone.append(
                 pd.DataFrame(
                     {
-                        "calicost_seed": seed,
-                        "log_likelihood": rdrbaf["total_llf"],
+                        "calicost_seed": loglike[0],
+                        "log_likelihood": loglike[1],
                     },
                     index=[0],
                 )
@@ -249,19 +267,21 @@ def get_best_r_hmrf(
     cna_size,
     ploidy,
     random,
+    exp_initialization_num,
     verbose=False,
 ):
     """
     Retrieve the CalicoST random initialization with the maximum likelihood.
     """
-    df_clone = get_r_hmrf_loglikelihood(calico_dir, cnas, cna_size, ploidy, random)
+    loglikes = get_r_hmrf_loglikelihoods(calico_dir, cnas, cna_size, ploidy, random, exp_initialization_num)
+
+    if loglikes is None:
+        return None
 
     # NB returns first of degenerate max., i.e. 0 if all the likelihoods are the same.
-    return (
-        int(df_clone["calicost_seed"].iloc[np.argmax(df_clone["log_likelihood"])])
-        if df_clone is not None
-        else -1
-    )
+    idx = np.argmax(loglikes["log_likelihood"])
+
+    return int(loglikes["calicost_seed"].iloc[idx])
 
 
 def filter_non_netural(cna_frame):
@@ -760,7 +780,7 @@ def read_true_cna(
     """
     truth_cna_file = get_truth_cna_file(true_dir, cnas, cna_size, ploidy, random)
     df_cna = pd.read_csv(truth_cna_file, header=0, index_col=0, sep="\t")
-
+    
     df_cna["cna_gtype"] = df_cna.apply(
         lambda row: f"{row['A_copy']}|{row['B_copy']}", axis=1
     )
@@ -773,6 +793,10 @@ def read_true_cna(
         lambda row: f"{row['chr']}:{row['start']}-{row['end']}", axis=1
     )
     df_cna["cna_id"] = map_unique_entries(df_cna["cna_id"].values)
+
+    length_mb = (df_cna["end"] - df_cna["start"]) / 1.e6
+
+    df_cna.insert(3, "length [MB]", length_mb)
 
     return df_cna.sort_values(by=["clone", "chr", "start", "end"])
 
@@ -1100,12 +1124,52 @@ def get_sim_runs():
             }
         )
 
-    df = pd.DataFrame(result)
+    # NB 3x (global, local), 3x CNA size, 10x random, 5x initialization with potential failures.
+    # assert len(df) ~= 90 x 5
+    return pd.DataFrame(result)
+
+
+def get_sim_runs_stats(true_dir, calico_dir, cnas, cna_size, ploidy, random, exp_initialization_num):
+    result = []
+
+    for cnas, cna_size, ploidy, random in get_sim_run_generator():
+        calicost_seed = get_best_r_hmrf(
+            calico_dir,
+            cnas,
+            cna_size,
+            ploidy,
+            random,
+            exp_initialization_num,
+        )
+
+        calico_clones = get_calico_clones(
+            calico_dir, cnas, cna_size, ploidy, random, calicost_seed, true_dir=true_dir,
+        )
+
+        ari = adjusted_rand_score(
+            getattr(calico_clones, "est_clone"),
+            calico_clones.true_clone,
+        )
+
+        loglike = calico_clones.attrs["loglike"]
+
+        result.append(
+            {
+                "simid": get_simid(cnas, cna_size, ploidy, random),
+                "cnas": cnas,
+                "n_cnas": int(cnas[0] + cnas[1]),
+                "cna_size": cna_size,
+                "ploidy": ploidy,
+                "random": random,
+                "simid": get_simid(cnas, cna_size, ploidy, random),
+                "ari": ari,
+                "loglike": loglike,
+            }
+        )
 
     # NB 3x (global, local), 3x CNA size, 10x random, 5x initialization with potential failures.
     # assert len(df) ~= 90 x 5
-
-    return df
+    return pd.DataFrame(result)
 
 
 def get_true_clones_path(true_dir, cnas, cna_size, ploidy, random):
@@ -1155,6 +1219,10 @@ def plot_clones(clones, cnas, cna_size, ploidy, random, column="est_clone"):
         )
 
         title += f" ARI={ari:.2f}"
+
+    if "loglike" in clones.attrs:
+        title += f"; LL={clones.attrs['loglike']:.3e}"
+
 
     fig, ax = plt.subplots(figsize=(3, 3))
 
@@ -1242,9 +1310,13 @@ def get_calico_clones(
     initial_clones_path = get_calico_initial_clones_path(
         calico_dir, cnas, cna_size, ploidy, random, calicost_seed
     )
+
     allspots = np.load(initial_clones_path)
 
     calico_clones["initial_clone"] = allspots["round-1_assignment"]
+    calico_clones.attrs["loglike"] = get_r_hmrf_loglikelihood(
+        calico_dir, cnas, cna_size, ploidy, random, seed=calicost_seed,
+    )[1]
 
     return calico_clones
 
@@ -1256,6 +1328,7 @@ def get_calico_best_clones_path(calico_dir, cnas, cna_size, ploidy, random):
         cna_size,
         ploidy,
         random,
+        exp_initialization_num,
     )
 
     return get_calico_clones_path(
@@ -1272,6 +1345,7 @@ def get_calico_best_clones(
         cna_size,
         ploidy,
         random,
+        exp_initialization_num,
     )
 
     return get_calico_clones(
@@ -1387,13 +1461,11 @@ def get_pair_recall(est_label, true_label):
     return confusion[1, 1] / (cnts * (cnts - 1)).sum()
 
 
-def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
+def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir, exp_initialization_num):
     """
-    Compute the ARI and recall of the best-clone estimation by various
-    methods.
+    Compute the ARI and recall of the best-clone estimation by various methods.
     """
-    sim_params = get_sim_params()
-    df_clone_ari = []
+    df_clone_ari, df_calico_clone_ari = [], []
 
     for cnas, cna_size, ploidy, random in get_sim_run_generator():
         simid = get_simid(cnas, cna_size, ploidy, random)
@@ -1464,9 +1536,10 @@ def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
             cna_size,
             ploidy,
             random,
+            exp_initialization_num,
         )
 
-        for seed in range(5):
+        for seed in range(exp_initialization_num):
             clones_path = get_calico_clones_path(
                 calico_dir, cnas, cna_size, ploidy, random, seed
             )
@@ -1496,11 +1569,11 @@ def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
                 )
 
                 log_likelihood = get_r_hmrf_loglikelihood(
-                    calico_dir, cnas, cna_size, ploidy, random, initialization=seed
+                    calico_dir, cnas, cna_size, ploidy, random, seed=seed
                 )
 
                 log_likelihood = (
-                    log_likelihood["log_likelihood"].values[0]
+                    log_likelihood[1]
                     if log_likelihood is not None
                     else np.nan
                 )
@@ -1508,9 +1581,31 @@ def get_clone_aris(true_dir, calico_dir, numbat_dir, starch_dir):
                 calicost_summary["calicost_log_likelihood"] = log_likelihood
                 calicost_summary["clones_path"] = clones_path
 
-                df_clone_ari.append(calicost_summary)
+                df_calico_clone_ari.append(calicost_summary)
 
-    df_clone_ari = pd.concat(df_clone_ari, ignore_index=True)
+    df_calico_clone_ari = pd.concat(df_calico_clone_ari, ignore_index=True)
+    df_calico_clone_ari["ari_rank"] = df_calico_clone_ari.groupby("simid")["ari"]\
+                                                         .rank(method='dense', ascending=False)
+    
+    df_calico_clone_ari["simid_ari_max"] = df_calico_clone_ari.groupby("simid")["ari"]\
+                                                              .transform("max")
+
+    df_calico_clone_ari["calicost_log_likelihood_rank"] = df_calico_clone_ari.groupby("simid")["calicost_log_likelihood"]\
+                                                                             .rank(method='dense', ascending=False)
+
+    idx_max_ari = df_calico_clone_ari.groupby("simid")["ari"].idxmax()
+
+    max_log_likelihood = df_calico_clone_ari.loc[idx_max_ari, ["simid", "calicost_log_likelihood"]]
+
+    df_calico_clone_ari = df_calico_clone_ari.merge(
+        max_log_likelihood,
+        on="simid",
+        suffixes=("", "_max_ari")
+    )
+
+    return df_calico_clone_ari
+
+    df_clone_ari = pd.concat([df_clone_ari, df_calico_clone_ari], ignore_index=True)
     df_clone_ari.cna_size = pd.Categorical(
         df_clone_ari.cna_size, categories=["10Mb", "30Mb", "50Mb"], ordered=True
     )
@@ -1587,7 +1682,7 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
     gene_ranges = read_gene_ranges(calico_repo_dir)
 
     # EG 6 shared CNAs and 3 clone specific.
-    sim_params = get_sim_params()
+    # sim_params = get_sim_params()
     list_events = get_cna_types()
 
     df_event_f1 = []
@@ -1606,7 +1701,7 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
 
         # CalicoST
         best_initialization = get_best_r_hmrf(
-            calico_dir, cnas, cna_size, ploidy, random
+            calico_dir, cnas, cna_size, ploidy, random, exp_initialization_num
         )
 
         configuration_file = get_config_path(
@@ -1690,7 +1785,7 @@ def get_cna_f1s(calico_repo_dir, true_dir, calico_dir, numbat_dir, starch_dir):
 
 
 def plot_cna_f1s(df_event_f1):
-    sim_params = get_sim_params()
+    # sim_params = get_sim_params()
 
     figsize = (
         12,
